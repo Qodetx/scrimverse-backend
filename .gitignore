@@ -34,3 +34,13 @@ staticfiles/
 .DS_Store
 Thumbs.db
 
+# Testing & Coverage
+htmlcov/
+.coverage
+coverage.xml
+.pytest_cache/
+.cache/
+
+# CI/CD
+.gitlab-ci-cache/
+
