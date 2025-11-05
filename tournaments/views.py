@@ -1,6 +1,7 @@
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.exceptions import ValidationError
 from django.db.models import Q
 from django.core.cache import cache
 from .models import Tournament, Scrim, TournamentRegistration, ScrimRegistration, HostRating
@@ -241,8 +242,7 @@ class TournamentRegistrationCreateView(generics.CreateAPIView):
         
         # Check if already registered
         if TournamentRegistration.objects.filter(tournament=tournament, player=player_profile).exists():
-            return Response({'error': 'Already registered for this tournament'}, 
-                          status=status.HTTP_400_BAD_REQUEST)
+            raise ValidationError({'error': 'Already registered for this tournament'})
         
         serializer.save(player=player_profile, tournament=tournament)
         
@@ -269,8 +269,7 @@ class ScrimRegistrationCreateView(generics.CreateAPIView):
         
         # Check if already registered
         if ScrimRegistration.objects.filter(scrim=scrim, player=player_profile).exists():
-            return Response({'error': 'Already registered for this scrim'}, 
-                          status=status.HTTP_400_BAD_REQUEST)
+            raise ValidationError({'error': 'Already registered for this scrim'})
         
         serializer.save(player=player_profile, scrim=scrim)
         

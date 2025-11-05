@@ -48,33 +48,36 @@ class ScrimListSerializer(serializers.ModelSerializer):
 class TournamentRegistrationSerializer(serializers.ModelSerializer):
     player = PlayerProfileSerializer(read_only=True)
     player_id = serializers.IntegerField(write_only=True, required=False)
-    tournament_details = TournamentListSerializer(source='tournament', read_only=True)
+    tournament = TournamentListSerializer(read_only=True)
+    tournament_id = serializers.IntegerField(write_only=True, required=False)
     
     class Meta:
         model = TournamentRegistration
         fields = '__all__'
-        read_only_fields = ('registered_at', 'updated_at')
+        read_only_fields = ('player', 'tournament', 'registered_at', 'updated_at')
 
 
 class ScrimRegistrationSerializer(serializers.ModelSerializer):
     player = PlayerProfileSerializer(read_only=True)
     player_id = serializers.IntegerField(write_only=True, required=False)
-    scrim_details = ScrimListSerializer(source='scrim', read_only=True)
+    scrim = ScrimListSerializer(read_only=True)
+    scrim_id = serializers.IntegerField(write_only=True, required=False)
     
     class Meta:
         model = ScrimRegistration
         fields = '__all__'
-        read_only_fields = ('registered_at', 'updated_at')
+        read_only_fields = ('player', 'scrim', 'registered_at', 'updated_at')
 
 
 class HostRatingSerializer(serializers.ModelSerializer):
     player = PlayerProfileSerializer(read_only=True)
     player_id = serializers.IntegerField(write_only=True, required=False)
+    host_id = serializers.IntegerField(write_only=True, required=False)
     
     class Meta:
         model = HostRating
         fields = '__all__'
-        read_only_fields = ('created_at',)
+        read_only_fields = ('player', 'host', 'created_at',)
     
     def validate_rating(self, value):
         if value < 1 or value > 5:
