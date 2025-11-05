@@ -134,10 +134,19 @@ check_migrations:
     - redis:7-alpine
   
   before_script:
+    - echo "Installing system dependencies..."
+    - apt-get update -qy
+    - apt-get install -y postgresql-client
+    
+    - echo "Setting up Python virtual environment..."
     - python -m venv .venv
     - source .venv/bin/activate
+    
+    - echo "Installing Python dependencies..."
     - pip install --upgrade pip
     - pip install -r requirements.txt
+    
+    - echo "Waiting for PostgreSQL to be ready..."
     - until pg_isready -h postgres -U postgres; do echo "Waiting for postgres..."; sleep 2; done
   
   script:
