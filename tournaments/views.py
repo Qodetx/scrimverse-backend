@@ -2,6 +2,7 @@ from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.db.models import Q
+from django.core.cache import cache
 from .models import Tournament, Scrim, TournamentRegistration, ScrimRegistration, HostRating
 from accounts.models import HostProfile, PlayerProfile
 from .serializers import (
@@ -28,12 +29,33 @@ class IsPlayerUser(permissions.BasePermission):
 
 class TournamentListView(generics.ListAPIView):
     """
-    List all tournaments (Guest/Player/Host can access)
+    List all tournaments with Redis cache (Guest/Player/Host can access)
     GET /api/tournaments/
+    Cache: Only when no filters applied
     """
     queryset = Tournament.objects.all()
     serializer_class = TournamentListSerializer
     permission_classes = [permissions.AllowAny]
+    
+    def list(self, request, *args, **kwargs):
+        # Only cache if no query params (unfiltered list)
+        status_param = request.query_params.get('status')
+        game_param = request.query_params.get('game')
+        
+        if not status_param and not game_param:
+            cache_key = 'tournaments:list:all'
+            cached_data = cache.get(cache_key)
+            
+            if cached_data:
+                return Response(cached_data)
+            
+            queryset = self.filter_queryset(self.get_queryset())
+            serializer = self.get_serializer(queryset, many=True)
+            cache.set(cache_key, serializer.data, timeout=300)  # 5 minutes
+            return Response(serializer.data)
+        
+        # Don't cache filtered results
+        return super().list(request, *args, **kwargs)
     
     def get_queryset(self):
         queryset = Tournament.objects.all()
@@ -62,6 +84,7 @@ class TournamentCreateView(generics.CreateAPIView):
     """
     Host creates a tournament
     POST /api/tournaments/create/
+    Invalidates cache on creation
     """
     serializer_class = TournamentSerializer
     permission_classes = [IsHostUser]
@@ -69,12 +92,15 @@ class TournamentCreateView(generics.CreateAPIView):
     def perform_create(self, serializer):
         host_profile = HostProfile.objects.get(user=self.request.user)
         serializer.save(host=host_profile)
+        # Invalidate tournament list cache
+        cache.delete('tournaments:list:all')
 
 
 class TournamentUpdateView(generics.UpdateAPIView):
     """
     Host updates their tournament
     PUT/PATCH /api/tournaments/<id>/update/
+    Invalidates cache on update
     """
     queryset = Tournament.objects.all()
     serializer_class = TournamentSerializer
@@ -84,12 +110,18 @@ class TournamentUpdateView(generics.UpdateAPIView):
         # Host can only update their own tournaments
         host_profile = HostProfile.objects.get(user=self.request.user)
         return Tournament.objects.filter(host=host_profile)
+    
+    def perform_update(self, serializer):
+        serializer.save()
+        # Invalidate cache
+        cache.delete('tournaments:list:all')
 
 
 class TournamentDeleteView(generics.DestroyAPIView):
     """
     Host deletes their tournament
     DELETE /api/tournaments/<id>/delete/
+    Invalidates cache on deletion
     """
     queryset = Tournament.objects.all()
     permission_classes = [IsHostUser]
@@ -97,6 +129,11 @@ class TournamentDeleteView(generics.DestroyAPIView):
     def get_queryset(self):
         host_profile = HostProfile.objects.get(user=self.request.user)
         return Tournament.objects.filter(host=host_profile)
+    
+    def perform_destroy(self, instance):
+        instance.delete()
+        # Invalidate cache
+        cache.delete('tournaments:list:all')
 
 
 class HostTournamentsView(generics.ListAPIView):
@@ -192,6 +229,7 @@ class TournamentRegistrationCreateView(generics.CreateAPIView):
     """
     Player registers for a tournament
     POST /api/tournaments/<tournament_id>/register/
+    Invalidates cache when participant count changes
     """
     serializer_class = TournamentRegistrationSerializer
     permission_classes = [IsPlayerUser]
@@ -211,6 +249,9 @@ class TournamentRegistrationCreateView(generics.CreateAPIView):
         # Update participant count
         tournament.current_participants += 1
         tournament.save()
+        
+        # Invalidate cache since participant count changed
+        cache.delete('tournaments:list:all')
 
 
 class ScrimRegistrationCreateView(generics.CreateAPIView):
