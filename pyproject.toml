@@ -1,0 +1,60 @@
+# Python project configuration for Scrimverse Backend
+
+[tool.black]
+line-length = 120
+target-version = ['py312']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+    \.git
+  | \.venv
+  | venv
+  | migrations
+  | __pycache__
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 120
+skip_glob = ["*/migrations/*", "*/__pycache__/*", ".venv/*"]
+known_django = ["django"]
+known_first_party = ["accounts", "tournaments", "scrimverse"]
+sections = ["FUTURE", "STDLIB", "DJANGO", "THIRDPARTY", "FIRSTPARTY", "LOCALFOLDER"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "scrimverse.settings"
+python_files = ["test_*.py"]
+addopts = "--strict-markers --nomigrations --reuse-db"
+markers = [
+    "auth: tests related to authentication",
+    "tournaments: tests related to tournaments",
+    "scrims: tests related to scrims",
+    "registrations: tests related to registrations",
+    "permissions: tests related to permissions",
+    "cache: tests related to caching",
+]
+
+[tool.coverage.run]
+source = ["."]
+omit = [
+    "*/migrations/*",
+    "*/tests/*",
+    "*/__pycache__/*",
+    "*/venv/*",
+    "*/.venv/*",
+    "manage.py",
+    "*/asgi.py",
+    "*/wsgi.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]
