@@ -19,6 +19,7 @@ def test_player_register_for_tournament(authenticated_client, tournament):
         "team_members": ["Player1", "Player2", "Player3", "Player4"],
         "in_game_details": {"ign": "ProGamer", "uid": "UID123456", "rank": "Crown"},
     }
+
     response = authenticated_client.post(f"/api/tournaments/{tournament.id}/register/", data, format="json")
 
     assert response.status_code == status.HTTP_201_CREATED

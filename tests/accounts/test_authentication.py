@@ -102,7 +102,6 @@ def test_host_registration_success(api_client):
         "password": "TestPass123!",
         "password2": "TestPass123!",
         "phone_number": "9876543210",
-        "organization_name": "Gaming Org",
     }
     response = api_client.post("/api/accounts/host/register/", data)
 
@@ -114,7 +113,6 @@ def test_host_registration_success(api_client):
     user = User.objects.get(email="newhost@test.com")
     assert user.user_type == "host"
     assert hasattr(user, "host_profile")
-    assert user.host_profile.organization_name == "Gaming Org"
 
 
 @pytest.mark.auth

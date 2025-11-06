@@ -15,7 +15,7 @@ class User(AbstractUser):
 
     email = models.EmailField(unique=True)
     user_type = models.CharField(max_length=10, choices=USER_TYPE_CHOICES)
-    phone_number = models.CharField(max_length=15, blank=True, null=True)
+    phone_number = models.CharField(max_length=10)
     profile_picture = models.ImageField(upload_to="profiles/", blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -58,7 +58,7 @@ class HostProfile(models.Model):
     """
 
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="host_profile")
-    organization_name = models.CharField(max_length=200, blank=True)
+    organization_name = models.CharField(max_length=200, blank=True, null=True)
     bio = models.TextField(blank=True)
     website = models.URLField(blank=True)
     social_links = models.JSONField(default=dict, blank=True)  # {"twitter": "", "discord": ""}

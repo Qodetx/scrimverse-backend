@@ -50,7 +50,6 @@ class HostProfileFactory(DjangoModelFactory):
         model = HostProfile
 
     user = factory.SubFactory(UserFactory, user_type="host")
-    organization_name = factory.LazyAttribute(lambda _: fake.company())
     bio = factory.LazyAttribute(lambda _: fake.text(max_nb_chars=300))
     website = factory.LazyAttribute(lambda _: fake.url())
     rating = 4.5

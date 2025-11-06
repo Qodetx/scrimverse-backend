@@ -67,21 +67,26 @@ class PlayerRegistrationSerializer(serializers.ModelSerializer):
 class HostRegistrationSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, required=True, validators=[validate_password])
     password2 = serializers.CharField(write_only=True, required=True)
-    organization_name = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:
         model = User
-        fields = ("email", "username", "password", "password2", "phone_number", "organization_name")
+        fields = ("email", "username", "password", "password2", "phone_number")
 
     def validate(self, attrs):
         if attrs["password"] != attrs["password2"]:
             raise serializers.ValidationError({"password": "Password fields didn't match."})
         return attrs
 
+    def validate_phone_number(self, value):
+        if not value.isdigit():
+            raise serializers.ValidationError("Phone number must contain only digits.")
+        if len(value) != 10:
+            raise serializers.ValidationError("Phone number must be exactly 10 digits long.")
+        return value
+
     def create(self, validated_data):
         # Remove password2 and profile fields
         validated_data.pop("password2")
-        organization_name = validated_data.pop("organization_name", "")
 
         # Create user
         user = User.objects.create_user(
@@ -89,11 +94,11 @@ class HostRegistrationSerializer(serializers.ModelSerializer):
             username=validated_data["username"],
             password=validated_data["password"],
             user_type="host",
-            phone_number=validated_data.get("phone_number", ""),
+            phone_number=validated_data.get("phone_number"),
         )
 
         # Create host profile
-        HostProfile.objects.create(user=user, organization_name=organization_name)
+        HostProfile.objects.create(user=user)
 
         return user
 
