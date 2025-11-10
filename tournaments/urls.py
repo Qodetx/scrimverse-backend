@@ -1,9 +1,12 @@
 from django.urls import path
 
 from .views import (  # Tournament URLs; Scrim URLs; Registration URLs; Rating URLs
+    EndRoundView,
+    EndTournamentView,
     HostRatingCreateView,
     HostRatingsListView,
     HostTournamentsView,
+    ManageTournamentView,
     PlayerScrimRegistrationsView,
     PlayerTournamentRegistrationsView,
     ScrimCreateView,
@@ -12,12 +15,19 @@ from .views import (  # Tournament URLs; Scrim URLs; Registration URLs; Rating U
     ScrimListView,
     ScrimRegistrationCreateView,
     ScrimUpdateView,
+    SelectTeamsView,
+    SelectWinnerView,
+    StartRoundView,
+    SubmitRoundScoresView,
     TournamentCreateView,
     TournamentDeleteView,
     TournamentDetailView,
     TournamentListView,
     TournamentRegistrationCreateView,
+    TournamentRegistrationsView,
+    TournamentStatsView,
     TournamentUpdateView,
+    UpdateTournamentFieldsView,
 )
 
 urlpatterns = [
@@ -31,6 +41,17 @@ urlpatterns = [
     # Tournament Registration
     path("<int:tournament_id>/register/", TournamentRegistrationCreateView.as_view(), name="tournament-register"),
     path("my-registrations/", PlayerTournamentRegistrationsView.as_view(), name="my-tournament-registrations"),
+    # Tournament Management
+    path("<int:pk>/manage/", ManageTournamentView.as_view(), name="tournament-manage"),
+    path("<int:pk>/update-fields/", UpdateTournamentFieldsView.as_view(), name="tournament-update-fields"),
+    path("<int:tournament_id>/registrations/", TournamentRegistrationsView.as_view(), name="tournament-registrations"),
+    path("<int:tournament_id>/start-round/<int:round_number>/", StartRoundView.as_view(), name="start-round"),
+    path("<int:tournament_id>/submit-scores/", SubmitRoundScoresView.as_view(), name="submit-scores"),
+    path("<int:tournament_id>/select-teams/", SelectTeamsView.as_view(), name="select-teams"),
+    path("<int:tournament_id>/end-round/", EndRoundView.as_view(), name="end-round"),
+    path("<int:tournament_id>/select-winner/", SelectWinnerView.as_view(), name="select-winner"),
+    path("<int:tournament_id>/stats/", TournamentStatsView.as_view(), name="tournament-stats"),
+    path("<int:tournament_id>/end/", EndTournamentView.as_view(), name="end-tournament"),
     # Scrim endpoints
     path("scrims/", ScrimListView.as_view(), name="scrim-list"),
     path("scrims/<int:pk>/", ScrimDetailView.as_view(), name="scrim-detail"),

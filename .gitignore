@@ -43,3 +43,9 @@ coverage.xml
 
 # CI/CD
 .gitlab-ci-cache/
+
+# Celery
+celerybeat-schedule
+celerybeat-schedule-shm
+celerybeat-schedule-wal
+CELERY_SETUP.md

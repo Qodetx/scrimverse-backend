@@ -1,4 +1,5 @@
 from django.db import models
+from django.utils import timezone
 
 from accounts.models import HostProfile, PlayerProfile
 
@@ -66,6 +67,20 @@ class Tournament(models.Model):
     #   {"round": 3, "max_teams": 20, "qualifying_teams": 1}
     # ]
 
+    # Round Management
+    current_round = models.IntegerField(default=0, help_text="Current active round (0 = not started)")
+    round_status = models.JSONField(
+        default=dict, blank=True, help_text="Round status: {'1': 'completed', '2': 'ongoing', '3': 'upcoming'}"
+    )
+    selected_teams = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Selected teams per round: {'1': [reg_id1, reg_id2], '2': [reg_id3, reg_id4]}",
+    )
+    winners = models.JSONField(
+        default=dict, blank=True, help_text="Winners per round: {'2': reg_id1} (final round winner)"
+    )
+
     # Rules
     rules = models.TextField(help_text="Custom rules and regulations")
     requirements = models.JSONField(default=list, blank=True)  # ["Level 40+", "KD > 2.0"]
@@ -96,29 +111,10 @@ class Tournament(models.Model):
         """Get total number of rounds"""
         return len(self.rounds) if self.rounds else 0
 
-    def update_status(self):
-        """Auto-update status based on current time"""
-        from django.utils import timezone
-
-        now = timezone.now()
-
-        if self.tournament_start <= now < self.tournament_end:
-            if self.status != "ongoing":
-                self.status = "ongoing"
-                self.save(update_fields=["status"])
-        elif now >= self.tournament_end:
-            if self.status != "completed":
-                self.status = "completed"
-                self.save(update_fields=["status"])
-
-        return self.status
-
     def save(self, *args, **kwargs):
         """Override save to auto-update status"""
         # Auto-update status on save
         if self.pk and "status" not in kwargs.get("update_fields", []):
-            from django.utils import timezone
-
             now = timezone.now()
 
             if self.tournament_start <= now < self.tournament_end:
@@ -219,6 +215,23 @@ class TournamentRegistration(models.Model):
         db_table = "tournament_registrations"
         unique_together = ("tournament", "player")
         ordering = ["-registered_at"]
+
+
+class RoundScore(models.Model):
+    tournament = models.ForeignKey(Tournament, on_delete=models.CASCADE, related_name="round_scores")
+    round_number = models.IntegerField()
+    team = models.ForeignKey(TournamentRegistration, on_delete=models.CASCADE, related_name="round_scores")
+    position_points = models.IntegerField(default=0)
+    kill_points = models.IntegerField(default=0)
+    total_points = models.IntegerField(default=0)
+
+    class Meta:
+        unique_together = ("tournament", "round_number", "team")
+        db_table = "round_scores"
+
+    def save(self, *args, **kwargs):
+        self.total_points = self.position_points + self.kill_points
+        super().save(*args, **kwargs)
 
 
 class ScrimRegistration(models.Model):

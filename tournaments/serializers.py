@@ -57,6 +57,7 @@ class TournamentListSerializer(serializers.ModelSerializer):
     """Simplified serializer for list views"""
 
     host_name = serializers.CharField(source="host.organization_name", read_only=True)
+    host = serializers.SerializerMethodField()
 
     class Meta:
         model = Tournament
@@ -66,6 +67,7 @@ class TournamentListSerializer(serializers.ModelSerializer):
             "game_name",
             "game_mode",
             "host_name",
+            "host",
             "max_participants",
             "current_participants",
             "entry_fee",
@@ -75,6 +77,9 @@ class TournamentListSerializer(serializers.ModelSerializer):
             "banner_image",
             "is_featured",
         )
+
+    def get_host(self, obj):
+        return {"id": obj.host.id, "organization_name": obj.host.organization_name}
 
 
 class ScrimSerializer(serializers.ModelSerializer):

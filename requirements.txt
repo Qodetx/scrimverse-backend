@@ -10,6 +10,9 @@ Pillow==10.4.0
 redis==5.0.1
 django-redis==5.4.0
 
+# Celery for Background Tasks
+celery==5.3.4
+
 # Async Support
 asgiref==3.8.1
 uvicorn==0.27.0

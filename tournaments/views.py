@@ -1,4 +1,8 @@
+import logging
+
 from django.core.cache import cache
+from django.db.models import Sum
+from django.utils import timezone
 
 from rest_framework import generics, parsers, permissions
 from rest_framework.exceptions import ValidationError
@@ -6,7 +10,7 @@ from rest_framework.response import Response
 
 from accounts.models import HostProfile, PlayerProfile
 
-from .models import HostRating, Scrim, ScrimRegistration, Tournament, TournamentRegistration
+from .models import HostRating, RoundScore, Scrim, ScrimRegistration, Tournament, TournamentRegistration
 from .serializers import (
     HostRatingSerializer,
     ScrimListSerializer,
@@ -16,6 +20,8 @@ from .serializers import (
     TournamentRegistrationSerializer,
     TournamentSerializer,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class IsHostUser(permissions.BasePermission):
@@ -47,22 +53,16 @@ class TournamentListView(generics.ListAPIView):
     permission_classes = [permissions.AllowAny]
 
     def list(self, request, *args, **kwargs):
-        # Update status of all tournaments before listing
-        from django.utils import timezone
-
         now = timezone.now()
 
-        # Update ongoing tournaments
         Tournament.objects.filter(tournament_start__lte=now, tournament_end__gt=now, status="upcoming").update(
             status="ongoing"
         )
 
-        # Update completed tournaments
         Tournament.objects.filter(tournament_end__lte=now, status__in=["upcoming", "ongoing"]).update(
             status="completed"
         )
 
-        # Only cache if no query params (unfiltered list)
         status_param = request.query_params.get("status")
         game_param = request.query_params.get("game")
 
@@ -399,3 +399,548 @@ class HostRatingsListView(generics.ListAPIView):
     def get_queryset(self):
         host_id = self.kwargs["host_id"]
         return HostRating.objects.filter(host_id=host_id)
+
+
+# ============= Tournament Management Views =============
+
+
+class ManageTournamentView(generics.RetrieveAPIView):
+    """
+    Get tournament management data (host only)
+    GET /api/tournaments/<pk>/manage/
+    Returns tournament with all registrations
+    """
+
+    serializer_class = TournamentSerializer
+    permission_classes = [IsHostUser]
+
+    def get_queryset(self):
+        host_profile = HostProfile.objects.get(user=self.request.user)
+        return Tournament.objects.filter(host=host_profile)
+
+    def retrieve(self, request, *args, **kwargs):
+        instance = self.get_object()
+        serializer = self.get_serializer(instance)
+
+        # Get all registrations for this tournament
+        registrations = TournamentRegistration.objects.filter(tournament=instance)
+        registration_serializer = TournamentRegistrationSerializer(registrations, many=True)
+
+        return Response(
+            {
+                "tournament": serializer.data,
+                "registrations": registration_serializer.data,
+            }
+        )
+
+
+class TournamentRegistrationsView(generics.ListAPIView):
+    """
+    Get all registrations for a tournament (host only)
+    GET /api/tournaments/<tournament_id>/registrations/
+    """
+
+    serializer_class = TournamentRegistrationSerializer
+    permission_classes = [IsHostUser]
+
+    def get_queryset(self):
+        tournament_id = self.kwargs["tournament_id"]
+        host_profile = HostProfile.objects.get(user=self.request.user)
+        tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
+        return TournamentRegistration.objects.filter(tournament=tournament)
+
+
+class StartRoundView(generics.GenericAPIView):
+    """
+    Start a specific round
+    POST /api/tournaments/<tournament_id>/start-round/<round_number>/
+    """
+
+    permission_classes = [IsHostUser]
+
+    def post(self, request, tournament_id, round_number):
+        host_profile = HostProfile.objects.get(user=request.user)
+        tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
+
+        # Validate round number
+        if round_number < 1 or round_number > len(tournament.rounds):
+            return Response(
+                {"error": f"Invalid round number. Tournament has {len(tournament.rounds)} rounds."}, status=400
+            )
+
+        # Check if previous round is completed (if not first round)
+        if round_number > 1:
+            prev_round_status = tournament.round_status.get(str(round_number - 1))
+            if prev_round_status != "completed":
+                return Response(
+                    {"error": f"Round {round_number - 1} must be completed before starting round {round_number}"},
+                    status=400,
+                )
+
+        # Initialize round_status if needed
+        if not tournament.round_status:
+            tournament.round_status = {}
+
+        # Set current round and status
+        tournament.current_round = round_number
+        tournament.round_status[str(round_number)] = "ongoing"
+
+        # Initialize selected_teams for this round if not exists
+        if not tournament.selected_teams:
+            tournament.selected_teams = {}
+        if str(round_number) not in tournament.selected_teams:
+            tournament.selected_teams[str(round_number)] = []
+
+        tournament.save(update_fields=["current_round", "round_status", "selected_teams"])
+        cache.delete("tournaments:list:all")
+
+        return Response(
+            {
+                "message": f"Round {round_number} started",
+                "current_round": tournament.current_round,
+                "round_status": tournament.round_status,
+            }
+        )
+
+
+class SubmitRoundScoresView(generics.GenericAPIView):
+    """
+    Host submits scores for teams in a round.
+    POST /api/tournaments/<tournament_id>/submit-scores/
+    Body: [
+      {"team_id": 12, "position_points": 10, "kill_points": 8},
+      {"team_id": 13, "position_points": 5, "kill_points": 12}
+    ]
+    Automatically selects top qualifying teams.
+    """
+
+    permission_classes = [IsHostUser]
+
+    def post(self, request, tournament_id):
+        host_profile = HostProfile.objects.get(user=request.user)
+        tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
+        round_num = tournament.current_round
+
+        if round_num == 0:
+            return Response({"error": "No active round"}, status=400)
+
+        scores_data = request.data
+        if not isinstance(scores_data, list):
+            return Response({"error": "Invalid data format"}, status=400)
+
+        # Save scores
+        for entry in scores_data:
+            team_id = entry.get("team_id")
+            position_points = int(entry.get("position_points", 0))
+            kill_points = int(entry.get("kill_points", 0))
+            team = TournamentRegistration.objects.get(id=team_id, tournament=tournament)
+            RoundScore.objects.update_or_create(
+                tournament=tournament,
+                round_number=round_num,
+                team=team,
+                defaults={"position_points": position_points, "kill_points": kill_points},
+            )
+
+        # Auto select top N teams
+        round_config = next((r for r in tournament.rounds if r["round"] == round_num), None)
+        qualifying_teams = int(round_config.get("qualifying_teams") or 0)
+        all_scores = RoundScore.objects.filter(tournament=tournament, round_number=round_num).order_by("-total_points")
+
+        selected_team_ids = list(all_scores.values_list("team_id", flat=True)[:qualifying_teams])
+        if not tournament.selected_teams:
+            tournament.selected_teams = {}
+        tournament.selected_teams[str(round_num)] = selected_team_ids
+        tournament.save(update_fields=["selected_teams"])
+
+        return Response(
+            {
+                "message": f"Scores submitted successfully. Top {qualifying_teams} teams auto-selected.",
+                "selected_teams": selected_team_ids,
+            }
+        )
+
+
+class SelectTeamsView(generics.GenericAPIView):
+    """
+    Select/eliminate teams for current round
+    POST /api/tournaments/<tournament_id>/select-teams/
+    Body: {"team_ids": [1, 2, 3], "action": "select"} or {"action": "eliminate"}
+    """
+
+    permission_classes = [IsHostUser]
+
+    def post(self, request, tournament_id):
+        host_profile = HostProfile.objects.get(user=request.user)
+        tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
+
+        if tournament.current_round == 0:
+            return Response({"error": "No round is currently active"}, status=400)
+
+        action = request.data.get("action")  # "select" or "eliminate"
+        team_ids = request.data.get("team_ids", [])
+
+        if action not in ["select", "eliminate"]:
+            return Response({"error": "Action must be 'select' or 'eliminate'"}, status=400)
+
+        round_num = str(tournament.current_round)
+        round_config = next((r for r in tournament.rounds if r["round"] == tournament.current_round), None)
+
+        if not round_config:
+            return Response({"error": "Round configuration not found"}, status=400)
+
+        # Get current selected teams for this round
+        if not tournament.selected_teams:
+            tournament.selected_teams = {}
+        if round_num not in tournament.selected_teams:
+            tournament.selected_teams[round_num] = []
+
+        current_selected = tournament.selected_teams[round_num]
+
+        if action == "select":
+            # Get selection limit: use qualifying_teams if set, otherwise max_teams
+            qualifying_teams = round_config.get("qualifying_teams")
+            max_teams = round_config.get("max_teams")
+
+            # Determine selection limit
+            if qualifying_teams and int(qualifying_teams) > 0:
+                selection_limit = int(qualifying_teams)
+            elif max_teams:
+                selection_limit = int(max_teams)
+            else:
+                return Response({"error": "Team selection limit not set for this round"}, status=400)
+
+            # Validate team IDs exist (allow pending and confirmed)
+            registrations = TournamentRegistration.objects.filter(
+                id__in=team_ids, tournament=tournament, status__in=["pending", "confirmed"]
+            )
+            valid_ids = list(registrations.values_list("id", flat=True))
+
+            # Frontend sends the complete selection, so we replace the current selection
+            # Check if the total number of teams doesn't exceed the limit
+            if len(valid_ids) > selection_limit:
+                return Response(
+                    {"error": f"Cannot select more than {selection_limit} teams. " f"You selected: {len(valid_ids)}"},
+                    status=400,
+                )
+
+            # Save the complete selection (replace existing)
+            tournament.selected_teams[round_num] = valid_ids
+
+        elif action == "eliminate":
+            # Remove teams
+            tournament.selected_teams[round_num] = [tid for tid in current_selected if tid not in team_ids]
+
+        tournament.save(update_fields=["selected_teams"])
+        cache.delete("tournaments:list:all")
+
+        return Response(
+            {
+                "message": f"Teams {action}ed successfully",
+                "selected_teams": tournament.selected_teams[round_num],
+                "selected_count": len(tournament.selected_teams[round_num]),
+            }
+        )
+
+
+class EndRoundView(generics.GenericAPIView):
+    """
+    End current round and move to next
+    POST /api/tournaments/<tournament_id>/end-round/
+    """
+
+    permission_classes = [IsHostUser]
+
+    def post(self, request, tournament_id):
+        host_profile = HostProfile.objects.get(user=request.user)
+        tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
+
+        if tournament.current_round == 0:
+            return Response({"error": "No round is currently active"}, status=400)
+
+        round_num = tournament.current_round
+        round_config = next((r for r in tournament.rounds if r["round"] == round_num), None)
+
+        if not round_config:
+            return Response({"error": "Round configuration not found"}, status=400)
+
+        # For ending round: check if it's final round (no qualifying_teams) or regular round
+        qualifying_teams = round_config.get("qualifying_teams")
+        max_teams = int(round_config.get("max_teams") or 0)
+        is_final_round = not qualifying_teams or int(qualifying_teams) == 0
+
+        selected_count = len(tournament.selected_teams.get(str(round_num), []))
+
+        # Final round: must have winner selected, not just teams
+        if is_final_round:
+            round_key = str(round_num)
+            winner = tournament.winners.get(round_key) if tournament.winners else None
+            if not winner:
+                return Response({"error": "Final round requires a winner to be selected before ending"}, status=400)
+        else:
+            # Regular round: must select exactly qualifying_teams (not max_teams)
+            required_teams = int(qualifying_teams) if qualifying_teams else max_teams
+            if selected_count != required_teams:
+                return Response(
+                    {"error": f"Must select exactly {required_teams} teams. " f"Currently selected: {selected_count}"},
+                    status=400,
+                )
+
+        # Mark current round as completed
+        if not tournament.round_status:
+            tournament.round_status = {}
+        tournament.round_status[str(round_num)] = "completed"
+
+        # Find next round - handle both int and string round numbers
+        next_round = None
+        next_round_num = round_num + 1
+
+        logger.info(f"Ending round {round_num}, looking for next round {next_round_num}")
+        logger.info(f"Available rounds: {[r.get('round') for r in tournament.rounds]}")
+
+        for round_config in tournament.rounds:
+            # Handle both int and string round numbers
+            config_round = round_config.get("round")
+            if config_round is None:
+                continue
+            # Convert to int for comparison
+            config_round_int = int(config_round) if isinstance(config_round, (int, str)) else config_round
+
+            logger.info(f"Checking round config: {config_round} (as int: {config_round_int}) vs next: {next_round_num}")
+
+            if config_round_int == next_round_num:
+                next_round = config_round_int
+                logger.info(f"Found next round: {next_round}")
+                break
+
+        if next_round is None:
+            logger.warning(f"No next round found. Current round: {round_num}, Total rounds: {len(tournament.rounds)}")
+
+        # Move to next round or reset if all rounds completed
+        if next_round:
+            # Automatically start next round
+            tournament.current_round = next_round
+            tournament.round_status[str(next_round)] = "ongoing"
+
+            # Initialize selected_teams for next round if not exists
+            if not tournament.selected_teams:
+                tournament.selected_teams = {}
+            if str(next_round) not in tournament.selected_teams:
+                tournament.selected_teams[str(next_round)] = []
+
+            message = f"Round {round_num} completed. Round {next_round} started automatically."
+        else:
+            # All rounds completed
+            tournament.current_round = 0
+            message = f"Round {round_num} completed. All rounds are now complete."
+
+        tournament.save(update_fields=["current_round", "round_status", "selected_teams"])
+        cache.delete("tournaments:list:all")
+
+        return Response(
+            {
+                "message": message,
+                "current_round": tournament.current_round,
+                "round_status": tournament.round_status,
+                "all_rounds_completed": next_round is None,
+                "next_round_started": next_round is not None,
+            }
+        )
+
+
+class SelectWinnerView(generics.GenericAPIView):
+    """
+    Select winner for final round (when 2 teams, 1 winner)
+    POST /api/tournaments/<tournament_id>/select-winner/
+    Body: {"winner_id": 123}
+    """
+
+    permission_classes = [IsHostUser]
+
+    def post(self, request, tournament_id):
+        host_profile = HostProfile.objects.get(user=request.user)
+        tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
+
+        if tournament.current_round == 0:
+            return Response({"error": "No round is currently active"}, status=400)
+
+        round_num = tournament.current_round
+        round_config = next((r for r in tournament.rounds if r["round"] == round_num), None)
+
+        if not round_config:
+            return Response({"error": "Round configuration not found"}, status=400)
+
+        winner_id = request.data.get("winner_id")
+        if not winner_id:
+            return Response({"error": "winner_id is required"}, status=400)
+
+        # Get selected teams for current round
+        round_key = str(round_num)
+        selected_team_ids = tournament.selected_teams.get(round_key, [])
+
+        # Validate winner is in selected teams
+        winner_id_int = int(winner_id)
+        if winner_id_int not in selected_team_ids:
+            return Response({"error": "Winner must be one of the selected teams for this round"}, status=400)
+
+        # Check if this is a final round (no qualifying_teams or qualifying_teams = 0)
+        qualifying_teams = round_config.get("qualifying_teams")
+        is_final_round = not qualifying_teams or int(qualifying_teams) == 0
+
+        # Check if it's the last round
+        is_last_round = round_num == len(tournament.rounds)
+
+        if not (is_final_round and is_last_round):
+            return Response({"error": "Winner selection is only available for final rounds"}, status=400)
+
+        if len(selected_team_ids) < 2:
+            return Response({"error": "Final round requires at least 2 teams to select a winner"}, status=400)
+
+        # Save winner
+        if not tournament.winners:
+            tournament.winners = {}
+        tournament.winners[round_key] = winner_id_int
+
+        tournament.save(update_fields=["winners"])
+        cache.delete("tournaments:list:all")
+
+        # Get winner registration details
+        winner_registration = TournamentRegistration.objects.get(id=winner_id_int, tournament=tournament)
+
+        return Response(
+            {
+                "message": "Winner selected successfully!",
+                "winner": {
+                    "id": winner_registration.id,
+                    "team_name": winner_registration.team_name or winner_registration.player.in_game_name,
+                    "player_name": winner_registration.player.in_game_name,
+                },
+                "round": round_num,
+            }
+        )
+
+
+class TournamentStatsView(generics.GenericAPIView):
+    """
+    Get full tournament leaderboard (accessible by all)
+    GET /api/tournaments/<tournament_id>/stats/
+    """
+
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, tournament_id):
+        try:
+            tournament = Tournament.objects.get(id=tournament_id)
+        except Tournament.DoesNotExist:
+            return Response({"error": "Tournament not found"}, status=404)
+
+        # Aggregate scores for all teams across all rounds
+        team_scores = (
+            RoundScore.objects.filter(tournament=tournament)
+            .values("team__id", "team__team_name", "team__player__in_game_name")
+            .annotate(
+                total_position_points=Sum("position_points"),
+                total_kill_points=Sum("kill_points"),
+                total_points=Sum("total_points"),
+            )
+            .order_by("-total_points", "-total_kill_points")
+        )
+
+        # Add rank
+        leaderboard = []
+        for idx, entry in enumerate(team_scores, start=1):
+            leaderboard.append(
+                {
+                    "rank": idx,
+                    "team_id": entry["team__id"],
+                    "team_name": entry["team__team_name"] or entry["team__player__in_game_name"],
+                    "player_name": entry["team__player__in_game_name"],
+                    "total_position_points": entry["total_position_points"],
+                    "total_kill_points": entry["total_kill_points"],
+                    "total_points": entry["total_points"],
+                }
+            )
+
+        return Response(
+            {
+                "tournament": tournament.title,
+                "game": tournament.game_name,
+                "status": tournament.status,
+                "leaderboard": leaderboard,
+            }
+        )
+
+
+class UpdateTournamentFieldsView(generics.UpdateAPIView):
+    """
+    Update specific tournament fields (restricted - host only)
+    PUT/PATCH /api/tournaments/<pk>/update-fields/
+    Only allows updating: title, description, rules, discord_id, banner_image
+    """
+
+    serializer_class = TournamentSerializer
+    permission_classes = [IsHostUser]
+    parser_classes = (parsers.MultiPartParser, parsers.FormParser, parsers.JSONParser)
+
+    def get_queryset(self):
+        host_profile = HostProfile.objects.get(user=self.request.user)
+        return Tournament.objects.filter(host=host_profile)
+
+    def update(self, request, *args, **kwargs):
+        instance = self.get_object()
+
+        # Only allow updating specific fields
+        allowed_fields = ["title", "description", "rules", "discord_id", "banner_image"]
+        data = request.data.copy()
+
+        # Filter to only allowed fields
+        filtered_data = {k: v for k, v in data.items() if k in allowed_fields}
+
+        # Handle file uploads
+        if "banner_image" in request.FILES:
+            filtered_data["banner_image"] = request.FILES["banner_image"]
+        elif "banner_image" in data and (data["banner_image"] == "" or data["banner_image"] == "null"):
+            # Remove empty banner_image to keep existing one
+            filtered_data.pop("banner_image", None)
+
+        serializer = self.get_serializer(instance, data=filtered_data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+
+        cache.delete("tournaments:list:all")
+        return Response(serializer.data)
+
+
+class EndTournamentView(generics.GenericAPIView):
+    """
+    End tournament (mark as completed)
+    POST /api/tournaments/<tournament_id>/end/
+    """
+
+    permission_classes = [IsHostUser]
+
+    def post(self, request, tournament_id):
+        host_profile = HostProfile.objects.get(user=request.user)
+        tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
+
+        # Check if all rounds are completed (warning only, not blocking)
+        all_rounds_completed = True
+        if tournament.round_status and len(tournament.round_status) > 0:
+            all_rounds_completed = all(status == "completed" for round_num, status in tournament.round_status.items())
+
+        # End tournament regardless of round status (host decision)
+        tournament.status = "completed"
+        tournament.current_round = 0
+        tournament.save(update_fields=["status", "current_round"])
+        cache.delete("tournaments:list:all")
+
+        message = "Tournament ended successfully"
+        if not all_rounds_completed:
+            message += " (Note: Not all rounds were completed)"
+
+        return Response(
+            {
+                "message": message,
+                "status": tournament.status,
+                "all_rounds_completed": all_rounds_completed,
+            }
+        )
