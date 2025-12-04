@@ -7,6 +7,7 @@ from .views import (  # Tournament URLs; Scrim URLs; Registration URLs; Rating U
     HostRatingsListView,
     HostTournamentsView,
     ManageTournamentView,
+    PlatformStatsView,
     PlayerScrimRegistrationsView,
     PlayerTournamentRegistrationsView,
     ScrimCreateView,
@@ -31,6 +32,8 @@ from .views import (  # Tournament URLs; Scrim URLs; Registration URLs; Rating U
 )
 
 urlpatterns = [
+    # Platform Stats
+    path("stats/platform/", PlatformStatsView.as_view(), name="platform-stats"),
     # Tournament endpoints
     path("", TournamentListView.as_view(), name="tournament-list"),
     path("<int:pk>/", TournamentDetailView.as_view(), name="tournament-detail"),

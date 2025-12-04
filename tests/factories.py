@@ -65,7 +65,7 @@ class TournamentFactory(DjangoModelFactory):
     title = factory.LazyAttribute(lambda _: f"{fake.catch_phrase()} Tournament")
     description = factory.LazyAttribute(lambda _: fake.text(max_nb_chars=500))
     game_name = factory.Iterator(["BGMI", "Free Fire", "Call of Duty", "Valorant", "PUBG"])
-    game_mode = factory.Iterator(["Solo", "Duo", "Squad", "Team"])
+    game_mode = "Squad"  # Default to Squad mode for consistent testing
     max_participants = factory.Iterator([50, 100, 150, 200])
     current_participants = 0
     entry_fee = factory.LazyAttribute(lambda _: fake.pydecimal(left_digits=3, right_digits=2, positive=True))

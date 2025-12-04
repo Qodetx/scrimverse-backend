@@ -189,3 +189,14 @@ def tournament_registration(db, tournament, player_user):
 def scrim_registration(db, scrim, player_user):
     """Create a scrim registration"""
     return ScrimRegistrationFactory(scrim=scrim, player=player_user.player_profile)
+
+
+@pytest.fixture
+def test_players(db):
+    """Create test players with specific usernames for testing"""
+    players = []
+    for i in range(2, 5):  # Create testplayer2, testplayer3, testplayer4
+        user = UserFactory(user_type="player", username=f"testplayer{i}")
+        PlayerProfileFactory(user=user)
+        players.append(user)
+    return players

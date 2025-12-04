@@ -16,9 +16,18 @@ from tests.factories import HostProfileFactory, TournamentFactory, TournamentReg
 
 @pytest.mark.permissions
 @pytest.mark.django_db
-def test_player_can_register_for_tournament(authenticated_client, tournament):
+def test_player_can_register_for_tournament(authenticated_client, tournament, player_user, test_players):
     """Test player can register for tournament"""
-    data = {"team_name": "Player Team", "team_members": ["P1"], "in_game_details": {"ign": "Player", "uid": "UID"}}
+    data = {
+        "team_name": "Player Team",
+        "player_usernames": [
+            player_user.username,
+            test_players[0].username,
+            test_players[1].username,
+            test_players[2].username,
+        ],
+        "in_game_details": {"ign": "Player", "uid": "UID"},
+    }
 
     response = authenticated_client.post(f"/api/tournaments/{tournament.id}/register/", data, format="json")
 

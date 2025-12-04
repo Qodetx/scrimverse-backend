@@ -999,3 +999,37 @@ class EndTournamentView(generics.GenericAPIView):
                 "all_rounds_completed": all_rounds_completed,
             }
         )
+
+
+class PlatformStatsView(generics.GenericAPIView):
+    """
+    Get platform-wide statistics
+    GET /api/tournaments/stats/platform/
+    Returns aggregated stats for the entire platform
+    """
+
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        # Total tournaments
+        total_tournaments = Tournament.objects.count()
+
+        # Total players (unique player profiles)
+        total_players = PlayerProfile.objects.count()
+
+        # Total prize money distributed (sum of prize pools from completed tournaments)
+        total_prize_money = (
+            Tournament.objects.filter(status="completed").aggregate(total=Sum("prize_pool"))["total"] or 0
+        )
+
+        # Total registrations
+        total_registrations = TournamentRegistration.objects.count()
+
+        return Response(
+            {
+                "total_tournaments": total_tournaments,
+                "total_players": total_players,
+                "total_prize_money": str(total_prize_money),
+                "total_registrations": total_registrations,
+            }
+        )

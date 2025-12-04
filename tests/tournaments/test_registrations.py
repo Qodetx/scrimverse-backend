@@ -12,11 +12,17 @@ from tournaments.models import ScrimRegistration, TournamentRegistration
 
 
 @pytest.mark.django_db
-def test_player_register_for_tournament(authenticated_client, tournament):
+def test_player_register_for_tournament(authenticated_client, tournament, player_user, test_players):
     """Test player can register for tournament"""
+    # Tournament is Squad mode by default (requires 4 players)
     data = {
         "team_name": "Team Alpha",
-        "team_members": ["Player1", "Player2", "Player3", "Player4"],
+        "player_usernames": [
+            player_user.username,
+            test_players[0].username,
+            test_players[1].username,
+            test_players[2].username,
+        ],
         "in_game_details": {"ign": "ProGamer", "uid": "UID123456", "rank": "Crown"},
     }
 
@@ -31,22 +37,26 @@ def test_player_register_for_tournament(authenticated_client, tournament):
 
 
 @pytest.mark.django_db
-def test_register_without_in_game_details_fails(authenticated_client, tournament):
-    """Test registration fails without in_game_details"""
+def test_register_without_in_game_details_fails(authenticated_client, tournament, player_user, test_players):
+    """Test registration succeeds without in_game_details (uses default empty dict)"""
     data = {
         "team_name": "Team Beta",
-        "team_members": ["Player1"]
+        "player_usernames": [
+            player_user.username,
+            test_players[0].username,
+            test_players[1].username,
+            test_players[2].username,
+        ]
         # Missing in_game_details - should use default from model (empty dict)
     }
     response = authenticated_client.post(f"/api/tournaments/{tournament.id}/register/", data, format="json")
 
     # With default dict for in_game_details, registration succeeds
-    # If you want it to fail, need to add validation in serializer
     assert response.status_code == status.HTTP_201_CREATED
 
 
 @pytest.mark.django_db
-def test_register_twice_fails(api_client, tournament):
+def test_register_twice_fails(api_client, tournament, test_players):
     """Test player cannot register for same tournament twice"""
     # Create a player and register them
     player_user = UserFactory(user_type="player")
@@ -57,7 +67,12 @@ def test_register_twice_fails(api_client, tournament):
 
     data = {
         "team_name": "First Team",
-        "team_members": ["Player1"],
+        "player_usernames": [
+            player_user.username,
+            test_players[0].username,
+            test_players[1].username,
+            test_players[2].username,
+        ],
         "in_game_details": {"ign": "Gamer1", "uid": "UID111"},
     }
     # First registration should succeed
@@ -67,7 +82,12 @@ def test_register_twice_fails(api_client, tournament):
     # Second registration should fail
     data2 = {
         "team_name": "Second Team",
-        "team_members": ["Player1"],
+        "player_usernames": [
+            player_user.username,
+            test_players[0].username,
+            test_players[1].username,
+            test_players[2].username,
+        ],
         "in_game_details": {"ign": "Gamer2", "uid": "UID222"},
     }
     response2 = client.post(f"/api/tournaments/{tournament.id}/register/", data2, format="json")
@@ -210,17 +230,31 @@ def test_empty_registrations(authenticated_client):
 
 
 @pytest.mark.django_db
-def test_multiple_players_register(tournament, multiple_players):
+def test_multiple_players_register(tournament, test_players):
     """Test multiple players can register for same tournament"""
+    # Create 3 teams with unique players for each team
+    from tests.factories import PlayerProfileFactory, UserFactory
 
-    for i, player in enumerate(multiple_players[:3]):
+    # Create 3 team leaders + 9 additional teammates (3 per team)
+    all_players = []
+    for i in range(12):  # 3 teams * 4 players each
+        user = UserFactory(user_type="player", username=f"squadplayer{i}")
+        PlayerProfileFactory(user=user)
+        all_players.append(user)
+
+    # Register 3 teams with completely unique players
+    for team_idx in range(3):
+        # Get 4 unique players for this team
+        team_start = team_idx * 4
+        team_members = all_players[team_start : team_start + 4]
+
         client = APIClient()
-        client.force_authenticate(user=player)
+        client.force_authenticate(user=team_members[0])  # First player is the leader
 
         data = {
-            "team_name": f"Team {i}",
-            "team_members": [f"Player{i}"],
-            "in_game_details": {"ign": f"Gamer{i}", "uid": f"UID{i}"},
+            "team_name": f"Team {team_idx}",
+            "player_usernames": [p.username for p in team_members],
+            "in_game_details": {"ign": f"Gamer{team_idx}", "uid": f"UID{team_idx}"},
         }
         response = client.post(f"/api/tournaments/{tournament.id}/register/", data, format="json")
 

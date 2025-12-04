@@ -121,23 +121,30 @@ def test_cache_invalidated_on_tournament_delete(host_authenticated_client, tourn
 
 @pytest.mark.cache
 @pytest.mark.django_db
-def test_cache_invalidated_on_registration(authenticated_client, tournament):
+def test_cache_invalidated_on_registration(authenticated_client, tournament, player_user, test_players):
     """Test cache is cleared when player registers"""
     # Prime the cache
     client = APIClient()
     client.get("/api/tournaments/")
     assert cache.get("tournaments:list:all") is not None
 
-    # Register for tournament
+    # Register for tournament with correct format
     data = {
         "team_name": "Cache Test Team",
-        "team_members": ["Player1"],
+        "player_usernames": [
+            player_user.username,
+            test_players[0].username,
+            test_players[1].username,
+            test_players[2].username,
+        ],
         "in_game_details": {"ign": "CacheGamer", "uid": "UID999"},
     }
-    authenticated_client.post(f"/api/tournaments/{tournament.id}/register/", data, format="json")
+    response = authenticated_client.post(f"/api/tournaments/{tournament.id}/register/", data, format="json")
 
-    # Note: This might return 400 if registration format is wrong
-    # but we're mainly testing cache invalidation logic
+    # Registration should succeed
+    assert response.status_code == status.HTTP_201_CREATED
+
+    # Cache should be invalidated
     assert cache.get("tournaments:list:all") is None
 
 
