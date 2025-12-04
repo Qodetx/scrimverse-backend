@@ -161,3 +161,38 @@ class CurrentUserView(APIView):
             profile_data = HostProfileSerializer(user.host_profile).data
 
         return Response({"user": serializer.data, "profile": profile_data}, status=status.HTTP_200_OK)
+
+
+class PlayerUsernameSearchView(APIView):
+    """
+    Search for players by username (for team registration autocomplete)
+    GET /api/accounts/players/search/?q=<username>
+    Returns list of matching player usernames and details
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        query = request.query_params.get("q", "").strip()
+
+        if not query or len(query) < 2:
+            return Response({"results": []}, status=status.HTTP_200_OK)
+
+        # Search for players by username (case-insensitive, partial match)
+        players = PlayerProfile.objects.filter(
+            user__username__icontains=query, user__user_type="player"
+        ).select_related("user")[
+            :10
+        ]  # Limit to 10 results
+
+        results = [
+            {
+                "id": player.id,
+                "username": player.user.username,
+                "in_game_name": player.in_game_name,
+                "email": player.user.email,
+            }
+            for player in players
+        ]
+
+        return Response({"results": results}, status=status.HTTP_200_OK)

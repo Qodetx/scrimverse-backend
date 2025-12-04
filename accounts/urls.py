@@ -9,6 +9,7 @@ from .views import (
     LoginView,
     PlayerProfileView,
     PlayerRegistrationView,
+    PlayerUsernameSearchView,
 )
 
 urlpatterns = [
@@ -21,4 +22,6 @@ urlpatterns = [
     path("me/", CurrentUserView.as_view(), name="current-user"),
     path("player/profile/<int:pk>/", PlayerProfileView.as_view(), name="player-profile"),
     path("host/profile/<int:pk>/", HostProfileView.as_view(), name="host-profile"),
+    # Player Search
+    path("players/search/", PlayerUsernameSearchView.as_view(), name="player-username-search"),
 ]

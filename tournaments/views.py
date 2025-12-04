@@ -8,7 +8,7 @@ from rest_framework import generics, parsers, permissions
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
-from accounts.models import HostProfile, PlayerProfile
+from accounts.models import HostProfile, PlayerProfile, User
 
 from .models import HostRating, RoundScore, Scrim, ScrimRegistration, Tournament, TournamentRegistration
 from .serializers import (
@@ -287,26 +287,81 @@ class ScrimDeleteView(generics.DestroyAPIView):
 
 class TournamentRegistrationCreateView(generics.CreateAPIView):
     """
-    Player registers for a tournament
+    Player registers for a tournament as a team
     POST /api/tournaments/<tournament_id>/register/
+    Body: {
+        "team_name": "Team Name",
+        "player_usernames": ["player1", "player2", "player3", "player4"],
+        "in_game_details": {"ign": "", "uid": "", "rank": ""}
+    }
     Invalidates cache when participant count changes
     """
 
     serializer_class = TournamentRegistrationSerializer
     permission_classes = [IsPlayerUser]
 
+    def get_serializer_context(self):
+        """Add tournament_id to serializer context"""
+        context = super().get_serializer_context()
+        context["tournament_id"] = self.kwargs["tournament_id"]
+        return context
+
     def perform_create(self, serializer):
         player_profile = PlayerProfile.objects.get(user=self.request.user)
         tournament_id = self.kwargs["tournament_id"]
         tournament = Tournament.objects.get(id=tournament_id)
 
-        # Check if already registered
-        if TournamentRegistration.objects.filter(tournament=tournament, player=player_profile).exists():
-            raise ValidationError({"error": "Already registered for this tournament"})
+        # Check registration window
+        now = timezone.now()
+        if now < tournament.registration_start:
+            raise ValidationError({"error": "Registration has not started yet"})
+        if now > tournament.registration_end:
+            raise ValidationError({"error": "Registration has ended"})
 
-        serializer.save(player=player_profile, tournament=tournament)
+        # Check if tournament is full
+        if tournament.current_participants >= tournament.max_participants:
+            raise ValidationError({"error": "Tournament is full"})
 
-        # Update participant count
+        # Get player_usernames from validated data
+        player_usernames = serializer.validated_data.get("player_usernames", [])
+
+        # Validate that the current user is in the team
+        current_username = self.request.user.username
+        if current_username not in player_usernames:
+            raise ValidationError({"player_usernames": "You must include your own username in the team"})
+
+        # Check if any team member is already registered (check by player profile IDs)
+        # Get all player profiles for the team
+        team_users = User.objects.filter(username__in=player_usernames, user_type="player").select_related(
+            "player_profile"
+        )
+        team_player_ids = {user.player_profile.id for user in team_users if hasattr(user, "player_profile")}
+
+        # Check existing registrations
+        existing_registrations = TournamentRegistration.objects.filter(tournament=tournament)
+        for registration in existing_registrations:
+            if registration.team_members:
+                registered_player_ids = {member.get("id") for member in registration.team_members if member.get("id")}
+                # Check if any overlap
+                overlapping_ids = team_player_ids & registered_player_ids
+                if overlapping_ids:
+                    # Find usernames of overlapping players
+                    registered_usernames = [
+                        member.get("username")
+                        for member in registration.team_members
+                        if member.get("id") in overlapping_ids
+                    ]
+                    raise ValidationError(
+                        {
+                            "player_usernames": f"One or more players are already registered for this tournament: "
+                            f"{', '.join(registered_usernames)}"
+                        }
+                    )
+
+        # Save registration (serializer will handle team_members creation)
+        serializer.save(player_id=player_profile.id, tournament_id=tournament_id)
+
+        # Update participant count (count teams, not individual players)
         tournament.current_participants += 1
         tournament.save()
 
