@@ -3,14 +3,14 @@ import sys
 
 import django
 
-from accounts.models import User
-from tournaments.models import Scrim, ScrimRegistration, Tournament, TournamentRegistration
-
 # Add the backend root (where manage.py lives) to sys.path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Setup Django environment
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "scrimverse.settings")
 django.setup()
+
+from accounts.models import User  # noqa
+from tournaments.models import Scrim, ScrimRegistration, Tournament, TournamentRegistration  # noqa
 
 
 def cleanup_test_accounts():
