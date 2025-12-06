@@ -226,7 +226,8 @@ def test_select_winner_final_round(host_authenticated_client):
     tournament.round_status = {"1": "completed", "2": "ongoing"}
     reg1 = TournamentRegistrationFactory(tournament=tournament, status="confirmed")
     reg2 = TournamentRegistrationFactory(tournament=tournament, status="confirmed")
-    tournament.selected_teams = {"2": [reg1.id, reg2.id]}
+    # Set Round 1 selected teams as these are the participants for Round 2
+    tournament.selected_teams = {"1": [reg1.id, reg2.id]}
     tournament.save()
 
     client = APIClient()
@@ -262,7 +263,7 @@ def test_select_winner_non_final_round_fails(host_authenticated_client, tourname
 
 @pytest.mark.django_db
 def test_select_winner_not_in_selected_teams_fails(host_authenticated_client):
-    """Test selecting winner that's not in selected teams fails"""
+    """Test selecting winner that's not in participating teams fails"""
     host = HostProfileFactory()
     tournament = TournamentFactory(
         host=host,
@@ -275,17 +276,18 @@ def test_select_winner_not_in_selected_teams_fails(host_authenticated_client):
     reg1 = TournamentRegistrationFactory(tournament=tournament, status="confirmed")
     reg2 = TournamentRegistrationFactory(tournament=tournament, status="confirmed")
     reg3 = TournamentRegistrationFactory(tournament=tournament, status="confirmed")
-    tournament.selected_teams = {"2": [reg1.id, reg2.id]}
+    # Round 1 selected teams (participants for Round 2)
+    tournament.selected_teams = {"1": [reg1.id, reg2.id]}  # reg3 is NOT here
     tournament.save()
 
     client = APIClient()
     client.force_authenticate(user=host.user)
 
-    data = {"winner_id": reg3.id}  # reg3 not in selected teams
+    data = {"winner_id": reg3.id}  # reg3 not in participating teams
     response = client.post(f"/api/tournaments/{tournament.id}/select-winner/", data, format="json")
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert "selected teams" in response.data["error"].lower()
+    assert "participating teams" in response.data["error"].lower()
 
 
 @pytest.mark.django_db

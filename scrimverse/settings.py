@@ -45,6 +45,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "scrimverse.middleware.NoCacheMiddleware",
 ]
 
 ROOT_URLCONF = "scrimverse.urls"

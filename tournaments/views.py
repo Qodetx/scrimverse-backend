@@ -98,11 +98,37 @@ class TournamentDetailView(generics.RetrieveAPIView):
     """
     Get tournament details
     GET /api/tournaments/<id>/
+    Includes user_registration_status for authenticated players
     """
 
     queryset = Tournament.objects.all()
     serializer_class = TournamentSerializer
     permission_classes = [permissions.AllowAny]
+
+    def get(self, request, *args, **kwargs):
+        response = super().get(request, *args, **kwargs)
+
+        # Add user registration status if user is a player
+        if request.user.is_authenticated and request.user.user_type == "player":
+            try:
+                player_profile = PlayerProfile.objects.get(user=request.user)
+                tournament_id = kwargs.get("pk")
+
+                # Check if player has a registration
+                registration = TournamentRegistration.objects.filter(
+                    tournament_id=tournament_id, player=player_profile
+                ).first()
+
+                if registration:
+                    response.data["user_registration_status"] = registration.status
+                else:
+                    response.data["user_registration_status"] = None
+            except PlayerProfile.DoesNotExist:
+                response.data["user_registration_status"] = None
+        else:
+            response.data["user_registration_status"] = None
+
+        return response
 
 
 class TournamentCreateView(generics.CreateAPIView):
@@ -317,6 +343,18 @@ class TournamentRegistrationCreateView(generics.CreateAPIView):
             raise ValidationError({"error": "Registration has not started yet"})
         if now > tournament.registration_end:
             raise ValidationError({"error": "Registration has ended"})
+
+        # Check if player has a rejected registration
+        rejected_registration = TournamentRegistration.objects.filter(
+            tournament=tournament, player=player_profile, status="rejected"
+        ).first()
+
+        if rejected_registration:
+            raise ValidationError(
+                {
+                    "error": "You cannot re-register for this tournament. Your previous registration was rejected by the host."  # noqa
+                }
+            )
 
         # Check if tournament is full
         if tournament.current_participants >= tournament.max_participants:
@@ -828,14 +866,22 @@ class SelectWinnerView(generics.GenericAPIView):
         if not winner_id:
             return Response({"error": "winner_id is required"}, status=400)
 
-        # Get selected teams for current round
-        round_key = str(round_num)
-        selected_team_ids = tournament.selected_teams.get(round_key, [])
+        # Get participating teams for current round
+        if round_num == 1:
+            # For round 1, all confirmed teams are participating
+            participating_teams = TournamentRegistration.objects.filter(
+                tournament=tournament, status="confirmed"
+            ).values_list("id", flat=True)
+            valid_team_ids = list(participating_teams)
+        else:
+            # For other rounds, teams selected in previous round are participating
+            prev_round_key = str(round_num - 1)
+            valid_team_ids = tournament.selected_teams.get(prev_round_key, [])
 
-        # Validate winner is in selected teams
+        # Validate winner is in participating teams
         winner_id_int = int(winner_id)
-        if winner_id_int not in selected_team_ids:
-            return Response({"error": "Winner must be one of the selected teams for this round"}, status=400)
+        if winner_id_int not in valid_team_ids:
+            return Response({"error": "Winner must be one of the participating teams for this round"}, status=400)
 
         # Check if this is a final round (no qualifying_teams or qualifying_teams = 0)
         qualifying_teams = round_config.get("qualifying_teams")
@@ -847,12 +893,13 @@ class SelectWinnerView(generics.GenericAPIView):
         if not (is_final_round and is_last_round):
             return Response({"error": "Winner selection is only available for final rounds"}, status=400)
 
-        if len(selected_team_ids) < 2:
+        if len(valid_team_ids) < 2:
             return Response({"error": "Final round requires at least 2 teams to select a winner"}, status=400)
 
         # Save winner
         if not tournament.winners:
             tournament.winners = {}
+        round_key = str(round_num)
         tournament.winners[round_key] = winner_id_int
 
         tournament.save(update_fields=["winners"])
@@ -1031,5 +1078,131 @@ class PlatformStatsView(generics.GenericAPIView):
                 "total_players": total_players,
                 "total_prize_money": str(total_prize_money),
                 "total_registrations": total_registrations,
+            }
+        )
+
+
+class UpdateTeamStatusView(generics.GenericAPIView):
+    """
+    Host updates team registration status (confirm/reject)
+    PATCH /api/tournaments/<tournament_id>/registrations/<registration_id>/status/
+    Body: {"status": "confirmed"} or {"status": "rejected"}
+
+    Manages participant count:
+    - Confirming a pending team: no change (already counted)
+    - Confirming a rejected team: increase count
+    - Rejecting a pending/confirmed team: decrease count
+    """
+
+    permission_classes = [IsHostUser]
+
+    def patch(self, request, tournament_id, registration_id):
+        host_profile = HostProfile.objects.get(user=request.user)
+        tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
+
+        try:
+            registration = TournamentRegistration.objects.get(id=registration_id, tournament=tournament)
+        except TournamentRegistration.DoesNotExist:
+            return Response({"error": "Registration not found"}, status=404)
+
+        new_status = request.data.get("status")
+        if new_status not in ["confirmed", "rejected", "pending"]:
+            return Response({"error": "Invalid status. Must be 'confirmed', 'rejected', or 'pending'"}, status=400)
+
+        old_status = registration.status
+
+        # Update participant count based on status change
+        if old_status != new_status:
+            # Rejecting a team that was pending or confirmed -> decrease count
+            if new_status == "rejected" and old_status in ["pending", "confirmed"]:
+                if tournament.current_participants > 0:
+                    tournament.current_participants -= 1
+                    tournament.save(update_fields=["current_participants"])
+
+            # Confirming a team that was rejected -> increase count
+            elif new_status == "confirmed" and old_status == "rejected":
+                if tournament.current_participants < tournament.max_participants:
+                    tournament.current_participants += 1
+                    tournament.save(update_fields=["current_participants"])
+                else:
+                    return Response({"error": "Tournament is full. Cannot confirm more teams."}, status=400)
+
+        registration.status = new_status
+        registration.save()
+
+        return Response(
+            {
+                "message": f"Team status updated to {new_status}",
+                "registration_id": registration.id,
+                "status": registration.status,
+                "current_participants": tournament.current_participants,
+                "max_participants": tournament.max_participants,
+            }
+        )
+
+
+class StartTournamentView(generics.GenericAPIView):
+    """
+    Host explicitly starts the tournament
+    POST /api/tournaments/<tournament_id>/start/
+
+    Validates:
+    - All teams are confirmed (no pending teams)
+    - Tournament status is 'upcoming'
+
+    Actions:
+    - Changes status to 'ongoing'
+    - Sets current_round to 1
+    """
+
+    permission_classes = [IsHostUser]
+
+    def post(self, request, tournament_id):
+        try:
+            host_profile = HostProfile.objects.get(user=request.user)
+            tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
+        except Tournament.DoesNotExist:
+            return Response({"error": "Tournament not found"}, status=404)
+
+        # Validate tournament status
+        if tournament.status != "upcoming":
+            return Response({"error": f"Cannot start tournament. Current status: {tournament.status}"}, status=400)
+
+        # Check if all teams are confirmed
+        pending_teams = TournamentRegistration.objects.filter(tournament=tournament, status="pending").count()
+
+        if pending_teams > 0:
+            return Response(
+                {
+                    "error": f"Cannot start tournament. {pending_teams} team(s) still pending approval.",
+                    "pending_count": pending_teams,
+                },
+                status=400,
+            )
+
+        # Check if starting early
+        from django.utils import timezone
+
+        now = timezone.now()
+        is_early = now < tournament.tournament_start
+
+        # Update tournament
+        tournament.status = "ongoing"
+        tournament.current_round = 1
+
+        # Set Round 1 status to ongoing
+        if not tournament.round_status:
+            tournament.round_status = {}
+        tournament.round_status["1"] = "ongoing"
+
+        tournament.save(update_fields=["status", "current_round", "round_status"])
+
+        return Response(
+            {
+                "message": "Tournament started successfully",
+                "status": tournament.status,
+                "current_round": tournament.current_round,
+                "is_early_start": is_early,
+                "scheduled_start": tournament.tournament_start.isoformat() if tournament.tournament_start else None,
             }
         )

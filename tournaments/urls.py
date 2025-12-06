@@ -19,6 +19,7 @@ from .views import (  # Tournament URLs; Scrim URLs; Registration URLs; Rating U
     SelectTeamsView,
     SelectWinnerView,
     StartRoundView,
+    StartTournamentView,
     SubmitRoundScoresView,
     TournamentCreateView,
     TournamentDeleteView,
@@ -28,6 +29,7 @@ from .views import (  # Tournament URLs; Scrim URLs; Registration URLs; Rating U
     TournamentRegistrationsView,
     TournamentStatsView,
     TournamentUpdateView,
+    UpdateTeamStatusView,
     UpdateTournamentFieldsView,
 )
 
@@ -48,6 +50,12 @@ urlpatterns = [
     path("<int:pk>/manage/", ManageTournamentView.as_view(), name="tournament-manage"),
     path("<int:pk>/update-fields/", UpdateTournamentFieldsView.as_view(), name="tournament-update-fields"),
     path("<int:tournament_id>/registrations/", TournamentRegistrationsView.as_view(), name="tournament-registrations"),
+    path(
+        "<int:tournament_id>/registrations/<int:registration_id>/status/",
+        UpdateTeamStatusView.as_view(),
+        name="update-team-status",
+    ),
+    path("<int:tournament_id>/start/", StartTournamentView.as_view(), name="start-tournament"),
     path("<int:tournament_id>/start-round/<int:round_number>/", StartRoundView.as_view(), name="start-round"),
     path("<int:tournament_id>/submit-scores/", SubmitRoundScoresView.as_view(), name="submit-scores"),
     path("<int:tournament_id>/select-teams/", SelectTeamsView.as_view(), name="select-teams"),

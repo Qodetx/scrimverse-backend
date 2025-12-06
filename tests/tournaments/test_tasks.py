@@ -148,14 +148,14 @@ def test_cache_cleared_when_updates_occur(host_user):
 def test_cache_not_cleared_when_no_updates(host_user):
     """Test that cache is not cleared when no tournaments are updated"""
     now = timezone.now()
-    cache.set("tournaments:list:all", {"test": "data"}, timeout=300)
-    assert cache.get("tournaments:list:all") is not None
     TournamentFactory(
         host=host_user.host_profile,
         status="upcoming",
         tournament_start=now + timedelta(hours=5),
         tournament_end=now + timedelta(hours=10),
     )
+    # Set cache after factory because factory triggers post_save signal which clears cache
+    cache.set("tournaments:list:all", {"test": "data"}, timeout=300)
     update_tournament_statuses()
     assert cache.get("tournaments:list:all") is not None
 
