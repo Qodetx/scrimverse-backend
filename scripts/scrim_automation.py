@@ -233,8 +233,7 @@ def create_scrim(token, game_mode, max_teams, max_matches=4, prize_pool=5000):
 
     res = res.json()
     print(
-        f"Scrim Created: {res['title']} | ID: {res['id']} | Mode: {game_mode} | "
-        f"Max Teams: {max_teams} | Matches: {max_matches}"
+        f"Scrim Created: {res['title']} | ID: {res['id']} | Mode: {game_mode} | Max Teams: {max_teams} | Matches: {max_matches}"
     )
     return res["id"]
 

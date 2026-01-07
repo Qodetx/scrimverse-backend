@@ -142,10 +142,9 @@ class ConfigureRoundView(generics.GenericAPIView):
         tournament.current_round = round_number
         tournament.save(update_fields=["round_status", "current_round"])
 
-        msg_prefix = "Scrim" if is_scrim else f"Round {round_number}"
         return Response(
             {
-                "message": f"{msg_prefix} configured successfully ({num_groups} group created)",
+                "message": f"{'Scrim' if is_scrim else 'Round ' + str(round_number)} configured successfully ({num_groups} group created)",
                 "num_groups": num_groups,
                 "teams_distribution": teams_distribution,
                 "total_qualifying": total_qualifying,

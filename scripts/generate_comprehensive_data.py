@@ -7,7 +7,7 @@ Creates 60 teams (240 players), 3 completed tournaments, 2 completed scrims,
 import os
 import random
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 import django
@@ -17,12 +17,12 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "scrimverse.settings")
 django.setup()
 
-from django.contrib.auth import get_user_model  # noqa: E402
-from django.db import models  # noqa: E402
-from django.utils import timezone  # noqa: E402
+from django.contrib.auth import get_user_model
+from django.db import models
+from django.utils import timezone
 
-from accounts.models import HostProfile, PlayerProfile, Team, TeamMember, TeamStatistics  # noqa: E402
-from tournaments.models import Group, Match, MatchScore, RoundScore, Tournament, TournamentRegistration  # noqa: E402
+from accounts.models import HostProfile, PlayerProfile, Team, TeamMember, TeamStatistics
+from tournaments.models import Group, Match, MatchScore, RoundScore, Tournament, TournamentRegistration
 
 User = get_user_model()
 
@@ -500,7 +500,7 @@ def create_completed_scrim(host, teams, scrim_num):
 
 def create_upcoming_tournament(host, teams):
     """Create an upcoming tournament with all teams registered"""
-    print("\n📅 Creating upcoming tournament...")
+    print(f"\n📅 Creating upcoming tournament...")
 
     game = random.choice(GAMES)
     game_mode = random.choice(GAME_MODES[game])
@@ -553,7 +553,7 @@ def create_upcoming_tournament(host, teams):
 
 def create_upcoming_scrim(host, teams):
     """Create an upcoming scrim with 25 teams registered"""
-    print("\n📅 Creating upcoming scrim...")
+    print(f"\n📅 Creating upcoming scrim...")
 
     selected_teams = random.sample(list(teams), 25)
 
@@ -692,7 +692,7 @@ def main():
     print("\n" + "=" * 60)
     print("✅ DATA GENERATION COMPLETE!")
     print("=" * 60)
-    print("\n📊 Summary:")
+    print(f"\n📊 Summary:")
     print(f"  - Teams created: {Team.objects.count()}")
     print(f"  - Players created: {User.objects.filter(user_type='player').count()}")
     print(
@@ -701,9 +701,9 @@ def main():
     print(f"  - Completed Scrims: {Tournament.objects.filter(event_mode='SCRIM', status='completed').count()}")
     print(f"  - Upcoming Tournaments: {Tournament.objects.filter(event_mode='TOURNAMENT', status='upcoming').count()}")
     print(f"  - Upcoming Scrims: {Tournament.objects.filter(event_mode='SCRIM', status='upcoming').count()}")
-    print("\n🔑 Login Credentials:")
-    print("  Host: host@scrimverse.com / password123")
-    print("  Players: player1@scrimverse.com to player240@scrimverse.com / password123")
+    print(f"\n🔑 Login Credentials:")
+    print(f"  Host: host@scrimverse.com / password123")
+    print(f"  Players: player1@scrimverse.com to player240@scrimverse.com / password123")
     print("\n" + "=" * 60)
 
 
