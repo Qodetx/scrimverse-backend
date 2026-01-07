@@ -44,6 +44,11 @@ class ConfigureRoundView(generics.GenericAPIView):
                 {"error": f"Invalid round number. Tournament has {len(tournament.rounds)} rounds."}, status=400
             )
 
+        # Scrim-specific logic
+        is_scrim = tournament.event_mode == "SCRIM"
+        if is_scrim and round_number != 1:
+            return Response({"error": "Scrims only support one round."}, status=400)
+
         # Check if round already configured
         existing_groups = Group.objects.filter(tournament=tournament, round_number=round_number)
         if existing_groups.exists():
@@ -57,17 +62,27 @@ class ConfigureRoundView(generics.GenericAPIView):
         qualifying_per_group = request.data.get("qualifying_per_group")
         matches_per_group = request.data.get("matches_per_group")
 
-        if not all([teams_per_group, qualifying_per_group, matches_per_group]):
-            return Response(
-                {"error": "Missing required fields: teams_per_group, qualifying_per_group, matches_per_group"},
-                status=400,
-            )
+        if is_scrim:
+            # Force Scrim parameters
+            total_registered = tournament.registrations.filter(status="confirmed").count()
+            teams_per_group = total_registered
+            qualifying_per_group = 0  # No qualification
+            if not matches_per_group:
+                matches_per_group = tournament.max_matches
+            else:
+                matches_per_group = min(int(matches_per_group), 6)
+        else:
+            if not all([teams_per_group, qualifying_per_group, matches_per_group]):
+                return Response(
+                    {"error": "Missing required fields: teams_per_group, qualifying_per_group, matches_per_group"},
+                    status=400,
+                )
 
         try:
             teams_per_group = int(teams_per_group)
             qualifying_per_group = int(qualifying_per_group)
             matches_per_group = int(matches_per_group)
-        except ValueError:
+        except (ValueError, TypeError):
             return Response({"error": "All configuration values must be integers"}, status=400)
 
         # Validate teams_per_group max limit
@@ -89,13 +104,18 @@ class ConfigureRoundView(generics.GenericAPIView):
 
         # Calculate group distribution
         try:
-            num_groups, teams_distribution = TournamentGroupService.calculate_groups(total_teams, teams_per_group)
+            if is_scrim:
+                # Force 1 group for scrims
+                num_groups = 1
+                teams_distribution = [total_teams]
+            else:
+                num_groups, teams_distribution = TournamentGroupService.calculate_groups(total_teams, teams_per_group)
         except ValueError as e:
             return Response({"error": str(e)}, status=400)
 
         # Validate qualifying teams
         total_qualifying = num_groups * qualifying_per_group
-        if qualifying_per_group > teams_per_group:
+        if not is_scrim and qualifying_per_group > teams_per_group:
             return Response(
                 {
                     "error": f"Qualifying teams per group ({qualifying_per_group}) cannot exceed teams per group ({teams_per_group})"  # noqa: E501
@@ -108,7 +128,7 @@ class ConfigureRoundView(generics.GenericAPIView):
             groups = TournamentGroupService.create_groups_for_round(
                 tournament=tournament,
                 round_number=round_number,
-                teams_per_group=teams_per_group,
+                teams_per_group=teams_per_group if not is_scrim else total_teams,
                 qualifying_per_group=qualifying_per_group,
                 matches_per_group=matches_per_group,
             )
@@ -122,9 +142,10 @@ class ConfigureRoundView(generics.GenericAPIView):
         tournament.current_round = round_number
         tournament.save(update_fields=["round_status", "current_round"])
 
+        msg_prefix = "Scrim" if is_scrim else f"Round {round_number}"
         return Response(
             {
-                "message": f"Round {round_number} configured successfully ({num_groups} groups created)",
+                "message": f"{msg_prefix} configured successfully ({num_groups} group created)",
                 "num_groups": num_groups,
                 "teams_distribution": teams_distribution,
                 "total_qualifying": total_qualifying,
@@ -425,11 +446,13 @@ class RoundResultsView(generics.GenericAPIView):
     GET /api/tournaments/<tournament_id>/rounds/<round_number>/results/
     """
 
-    permission_classes = [IsHostUser]
+    permission_classes = [permissions.AllowAny]
 
     def get(self, request, tournament_id, round_number):
-        host_profile = HostProfile.objects.get(user=request.user)
-        tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
+        try:
+            tournament = Tournament.objects.get(id=tournament_id)
+        except Tournament.DoesNotExist:
+            return Response({"error": "Tournament not found"}, status=404)
 
         groups = Group.objects.filter(tournament=tournament, round_number=round_number)
 

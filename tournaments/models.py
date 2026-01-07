@@ -36,6 +36,19 @@ class Tournament(models.Model):
         ("premium", "Premium + Promotion - ₹799"),
     )
 
+    EVENT_MODE_CHOICES = (
+        ("TOURNAMENT", "Tournament"),
+        ("SCRIM", "Scrim"),
+    )
+
+    # Event Mode - determines if this is a tournament or scrim
+    event_mode = models.CharField(
+        max_length=20,
+        choices=EVENT_MODE_CHOICES,
+        default="TOURNAMENT",
+        help_text="Event type: Tournament (competitive) or Scrim (practice)",
+    )
+
     host = models.ForeignKey(HostProfile, on_delete=models.CASCADE, related_name="tournaments")
     title = models.CharField(max_length=200)
     description = models.TextField(help_text="Tournament description")
@@ -48,7 +61,12 @@ class Tournament(models.Model):
     max_participants = models.IntegerField(help_text="Maximum number of teams")
     current_participants = models.IntegerField(default=0)
     entry_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
-    prize_pool = models.DecimalField(max_digits=10, decimal_places=2)
+    prize_pool = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
+
+    # Scrim-specific: Maximum number of matches (enforced for scrims, max 6)
+    max_matches = models.IntegerField(
+        default=6, help_text="Maximum number of matches (for scrims, max 6; for tournaments, based on rounds)"
+    )
 
     # Prize Distribution (stored as JSON)
     prize_distribution = models.JSONField(default=dict, blank=True)  # {"1st": 5000, "2nd": 3000, "3rd": 2000}
@@ -149,11 +167,30 @@ class Tournament(models.Model):
         if self.plan_type == "basic" and self.max_participants > 100:
             self.max_participants = 100
 
-        # Auto-set is_featured for featured and premium plans
-        if self.plan_type in ["featured", "premium"]:
-            self.is_featured = True
-        else:
+        if self.event_mode == "SCRIM":
+            # Force Scrim Rules
+            self.max_participants = min(self.max_participants, 25)
+            self.max_matches = min(self.max_matches, 4)
+            self.plan_type = "basic"
+
+            # Force 1 Round structure
+            self.rounds = [
+                {
+                    "round": 1,
+                    "max_teams": self.max_participants,
+                    "qualifying_teams": 0,  # 0 indicates final round / no qualification logic
+                }
+            ]
+
+            # Scrims don't get featured status usually unless manually set,
+            # but following the existing logic:
             self.is_featured = False
+        else:
+            # Auto-set is_featured for featured and premium plans
+            if self.plan_type in ["featured", "premium"]:
+                self.is_featured = True
+            else:
+                self.is_featured = False
 
         # Auto-update status on save
         if self.pk and "status" not in kwargs.get("update_fields", []):
@@ -165,6 +202,23 @@ class Tournament(models.Model):
                 self.status = "completed"
 
         super().save(*args, **kwargs)
+
+    def can_modify_scrim_structure(self):
+        """
+        Check if scrim structure (match count, teams, etc.) can be modified.
+        For scrims: Structure is locked once the first match starts.
+        Returns: (bool, str) - (can_modify, reason)
+        """
+        if self.event_mode != "SCRIM":
+            return True, "Not a scrim"
+
+        # Check if any match has started
+        first_match_started = Match.objects.filter(group__tournament=self, status__in=["live", "completed"]).exists()
+
+        if first_match_started:
+            return False, "Cannot modify scrim structure after first match has started"
+
+        return True, "Scrim structure can be modified"
 
     class Meta:
         db_table = "tournaments"
@@ -375,6 +429,119 @@ class Match(models.Model):
 
     def __str__(self):
         return f"{self.group.group_name} - Match {self.match_number}"
+
+    def can_edit_room_details(self):
+        """
+        Check if room ID and password can be edited.
+        For scrims: Only editable when status is 'waiting'
+        """
+        return self.status == "waiting"
+
+    def can_edit_scores(self):
+        """
+        Check if match scores can be edited.
+        Rules:
+        - Cannot edit if status is 'waiting'
+        - Cannot edit if completed and past grace period (15 min)
+        - For scrims: Cannot edit if next match has started
+        """
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        if self.status == "waiting":
+            return False
+
+        # Check grace period for completed matches
+        if self.status == "completed" and self.ended_at:
+            grace_period = timedelta(minutes=15)
+            if timezone.now() - self.ended_at > grace_period:
+                return False
+
+        # Scrim-specific: Lock if next match has started
+        if self.group.tournament.event_mode == "SCRIM":
+            next_match_started = Match.objects.filter(
+                group=self.group, match_number=self.match_number + 1, status__in=["live", "completed"]
+            ).exists()
+            if next_match_started:
+                return False
+
+        return True
+
+    def can_start_match(self):
+        """
+        Check if match can be started.
+        Preconditions:
+        - Status must be 'waiting'
+        - Room ID and password must be set
+        - At least 2 teams registered in the tournament
+        """
+        if self.status != "waiting":
+            return False, "Match has already started or completed"
+
+        if not self.match_id or not self.match_password:
+            return False, "Room ID and Password must be set before starting"
+
+        registered_teams = self.group.tournament.registrations.filter(status="confirmed").count()
+        if registered_teams < 2:
+            return False, "At least 2 teams must be registered"
+
+        return True, "Match can be started"
+
+    def can_end_match(self):
+        """
+        Check if match can be ended.
+        Preconditions:
+        - Status must be 'live'
+        - Match must have been live for at least 5 minutes
+        - All participating teams should have scores (or be marked DNS/DQ)
+        """
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        if self.status != "live":
+            return False, "Match is not currently live"
+
+        if self.started_at:
+            min_duration = timedelta(minutes=5)
+            if timezone.now() - self.started_at < min_duration:
+                return False, "Match must be live for at least 5 minutes before ending"
+
+        # Check if all teams have scores
+        registered_teams = self.group.teams.all()
+        teams_with_scores = self.scores.values_list("team", flat=True)
+
+        missing_scores = registered_teams.exclude(id__in=teams_with_scores)
+        if missing_scores.exists():
+            return False, f"{missing_scores.count()} team(s) missing scores"
+
+        return True, "Match can be ended"
+
+    def can_cancel_match(self):
+        """
+        Check if match can be cancelled (rolled back to waiting).
+        Only allowed if:
+        - Status is 'live'
+        - No scores have been submitted
+        - Match has been live for less than 10 minutes
+        """
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        if self.status != "live":
+            return False, "Only live matches can be cancelled"
+
+        if self.scores.exists():
+            return False, "Cannot cancel match after scores have been submitted"
+
+        if self.started_at:
+            max_cancel_duration = timedelta(minutes=10)
+            if timezone.now() - self.started_at > max_cancel_duration:
+                return False, "Cannot cancel match after 10 minutes"
+
+        return True, "Match can be cancelled"
 
 
 class MatchScore(models.Model):

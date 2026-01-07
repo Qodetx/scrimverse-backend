@@ -24,10 +24,61 @@ class UserSerializer(serializers.ModelSerializer):
 
 class PlayerProfileSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
+    current_team = serializers.SerializerMethodField()
+    matches_played = serializers.SerializerMethodField()
+    tournament_wins = serializers.SerializerMethodField()
+    scrim_wins = serializers.SerializerMethodField()
+    global_rank = serializers.SerializerMethodField()
+    tournament_rank = serializers.SerializerMethodField()
+    scrim_rank = serializers.SerializerMethodField()
 
     class Meta:
         model = PlayerProfile
         fields = "__all__"
+
+    def get_current_team(self, obj):
+        membership = TeamMember.objects.filter(user=obj.user).first()
+        if membership:
+            return {"id": membership.team.id, "name": membership.team.name}
+        return None
+
+    def get_matches_played(self, obj):
+        membership = TeamMember.objects.filter(user=obj.user).first()
+        if membership and hasattr(membership.team, "statistics"):
+            # In our data script we aggregate these, but for now we can sum position points if needed
+            # For simplicity, let's look at total_matches on the team scale
+            return membership.team.total_matches
+        return 0
+
+    def get_tournament_wins(self, obj):
+        membership = TeamMember.objects.filter(user=obj.user).first()
+        if membership and hasattr(membership.team, "statistics"):
+            return membership.team.statistics.tournament_wins
+        return 0
+
+    def get_scrim_wins(self, obj):
+        membership = TeamMember.objects.filter(user=obj.user).first()
+        if membership and hasattr(membership.team, "statistics"):
+            return membership.team.statistics.scrim_wins
+        return 0
+
+    def get_global_rank(self, obj):
+        membership = TeamMember.objects.filter(user=obj.user).first()
+        if membership and hasattr(membership.team, "statistics"):
+            return membership.team.statistics.rank
+        return None
+
+    def get_tournament_rank(self, obj):
+        membership = TeamMember.objects.filter(user=obj.user).first()
+        if membership and hasattr(membership.team, "statistics"):
+            return membership.team.statistics.tournament_rank
+        return None
+
+    def get_scrim_rank(self, obj):
+        membership = TeamMember.objects.filter(user=obj.user).first()
+        if membership and hasattr(membership.team, "statistics"):
+            return membership.team.statistics.scrim_rank
+        return None
 
 
 class HostProfileSerializer(serializers.ModelSerializer):

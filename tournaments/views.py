@@ -66,9 +66,10 @@ class TournamentListView(generics.ListAPIView):
 
         status_param = request.query_params.get("status")
         game_param = request.query_params.get("game")
-        category_param = request.query_params.get("category")  # 'all' or 'official'
+        category_param = request.query_params.get("category")
+        event_mode_param = request.query_params.get("event_mode")
 
-        if not status_param and not game_param and not category_param:
+        if not status_param and not game_param and not category_param and not event_mode_param:
             cache_key = "tournaments:list:all"
             cached_data = cache.get(cache_key)
 
@@ -88,15 +89,16 @@ class TournamentListView(generics.ListAPIView):
         status_param = self.request.query_params.get("status", None)
         game = self.request.query_params.get("game", None)
         category = self.request.query_params.get("category", None)
+        event_mode = self.request.query_params.get("event_mode", None)
 
         if status_param:
             queryset = queryset.filter(status=status_param)
         if game:
             queryset = queryset.filter(game_name__icontains=game)
+        if event_mode:
+            queryset = queryset.filter(event_mode=event_mode)
 
         # Filter by category based on plan type
-        # 'all' = basic plan tournaments (listed in All Tournaments)
-        # 'official' = featured and premium plan tournaments (listed in Official Tournaments)
         if category == "all":
             queryset = queryset.filter(plan_type="basic")
         elif category == "official":
@@ -168,8 +170,13 @@ class TournamentCreateView(generics.CreateAPIView):
                 elif hasattr(value, "size") and value.size == 0:
                     data.pop(file_field)
 
+        # Debug logging
+        print(f"[DEBUG] Received rounds data: {data.get('rounds')}")
+        print(f"[DEBUG] Received event_mode: {data.get('event_mode')}")
+
         serializer = self.get_serializer(data=data)
         if not serializer.is_valid():
+            print(f"[DEBUG] Serializer validation errors: {serializer.errors}")
             return Response(serializer.errors, status=400)
 
         self.perform_create(serializer)

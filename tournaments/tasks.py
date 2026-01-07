@@ -1,8 +1,11 @@
 """
 Celery tasks for tournaments app
 """
+import logging
+
 from django.core.cache import cache
-from django.db.models import Sum
+from django.db import transaction
+from django.db.models import F, Sum
 from django.utils import timezone
 
 from celery import shared_task
@@ -45,85 +48,116 @@ def update_tournament_statuses():
 def update_leaderboard():
     """
     Update team leaderboard statistics
-    Called when a tournament is completed
     Calculates:
-    - Tournament wins (1st place finishes only)
-    - Total position points (sum across all matches)
-    - Total kill points (sum across all matches)
-    - Global rank (based on total points)
+    - Tournament wins/points/rank
+    - Scrim wins/points/rank
+    - Overall rank
+    - Total matches played (only from completed events)
     """
-    from django.db import transaction
+    logger = logging.getLogger(__name__)
+    logger.info("Starting comprehensive leaderboard update...")
 
     # Get all non-temporary teams
     teams = Team.objects.filter(is_temporary=False)
 
+    completed_tournaments = Tournament.objects.filter(status="completed")
+
+    teams_updated = 0
     for team in teams:
-        # Get or create statistics
-        stats, created = TeamStatistics.objects.get_or_create(team=team)
+        try:
+            stats, _ = TeamStatistics.objects.get_or_create(team=team)
 
-        # Count tournament wins (1st place finishes in completed tournaments)
-        tournament_wins = 0
-        completed_tournaments = Tournament.objects.filter(status="completed")
+            # 1. Matches Played (from completed events)
+            # Individual matches played by this team in completed tournaments/scrims
+            matches_played = MatchScore.objects.filter(
+                team__team=team, match__group__tournament__status="completed"
+            ).count()
 
-        for tournament in completed_tournaments:
-            # Get final standings for this tournament
-            try:
-                # Get all registrations for this tournament
-                registrations = TournamentRegistration.objects.filter(tournament=tournament, team=team)
+            # 2. Wins Calculation
+            tournament_wins = 0
+            scrim_wins = 0
 
-                if registrations.exists():
-                    # registration = registrations.first()  # noqa: F841
-                    # Check if this team won (rank 1 in final standings)
-                    # We need to calculate final rank based on total points
-                    final_round = tournament.current_round
-                    if final_round > 0:
-                        # Get all scores for this team in the final round
-                        # team_scores = MatchScore.objects.filter(  # noqa: F841
-                        #     team__team=team,
-                        #     match__group__tournament=tournament,
-                        #     match__group__round_number=final_round
-                        # ).aggregate(total_pos=Sum("position_points"), total_kills=Sum("kill_points"))
+            for tournament in completed_tournaments:
+                if tournament.winners:
+                    # Check each round's winner (usually only final round matters for 'wins')
+                    # If it's a scrim, usually only 1 winner
+                    # If it's a tournament, we look for the winner of the final round
+                    final_round = str(len(tournament.rounds)) if tournament.rounds else "1"
+                    winner_reg_id = tournament.winners.get(final_round)
 
-                        # team_total = (team_scores["total_pos"] or 0)  # noqa: F841
-                        # team_total += (team_scores["total_kills"] or 0)
+                    if winner_reg_id:
+                        try:
+                            winner_reg = TournamentRegistration.objects.get(id=winner_reg_id)
+                            if winner_reg.team and winner_reg.team.id == team.id:
+                                if tournament.event_mode == "SCRIM":
+                                    scrim_wins += 1
+                                else:
+                                    tournament_wins += 1
+                        except TournamentRegistration.DoesNotExist:
+                            pass
 
-                        # Get all teams' totals for this tournament
-                        all_teams_scores = (
-                            MatchScore.objects.filter(
-                                match__group__tournament=tournament, match__group__round_number=final_round
-                            )
-                            .values("team__team")
-                            .annotate(total=Sum("position_points") + Sum("kill_points"))
-                            .order_by("-total")
-                        )
+            # 3. Points Calculation
+            # Tournament Points
+            t_scores = MatchScore.objects.filter(
+                team__team=team, match__group__tournament__event_mode="TOURNAMENT"
+            ).aggregate(pos=Sum("position_points"), kills=Sum("kill_points"))
 
-                        # Check if this team is rank 1
-                        if all_teams_scores and all_teams_scores[0]["team__team"] == team.id:
-                            tournament_wins += 1
-            except Exception as e:
-                print(f"Error calculating tournament win for team {team.name}: {e}")
-                continue
+            # Scrim Points
+            s_scores = MatchScore.objects.filter(
+                team__team=team, match__group__tournament__event_mode="SCRIM"
+            ).aggregate(pos=Sum("position_points"), kills=Sum("kill_points"))
 
-        # Calculate total points from ALL matches (not just completed tournaments)
-        all_scores = MatchScore.objects.filter(team__team=team).aggregate(
-            total_position=Sum("position_points"), total_kills=Sum("kill_points")
-        )
+            # Update stats object
+            stats.tournament_wins = tournament_wins
+            stats.tournament_position_points = t_scores["pos"] or 0
+            stats.tournament_kill_points = t_scores["kills"] or 0
 
-        # Update statistics
-        stats.tournament_wins = tournament_wins
-        stats.total_position_points = all_scores["total_position"] or 0
-        stats.total_kill_points = all_scores["total_kills"] or 0
-        stats.update_total_points()
+            stats.scrim_wins = scrim_wins
+            stats.scrim_position_points = s_scores["pos"] or 0
+            stats.scrim_kill_points = s_scores["kills"] or 0
 
-    # Assign ranks based on total points (descending)
-    all_stats = TeamStatistics.objects.all().order_by("-total_points", "-tournament_wins", "-total_kill_points")
+            # Aggregate for overall
+            stats.total_position_points = stats.tournament_position_points + stats.scrim_position_points
+            stats.total_kill_points = stats.tournament_kill_points + stats.scrim_kill_points
+            stats.total_points = stats.total_position_points + stats.total_kill_points
+            stats.save()
 
+            # Update Team model field for matches_played/wins
+            team.total_matches = matches_played
+            team.wins = tournament_wins + scrim_wins
+            team.save(update_fields=["total_matches", "wins"])
+
+            teams_updated += 1
+        except Exception as e:
+            logger.error(f"Error updating stats for team {team.name}: {e}")
+            continue
+
+    # 4. Assign Ranks
     with transaction.atomic():
-        for rank, stat in enumerate(all_stats, start=1):
-            stat.rank = rank
-            stat.save(update_fields=["rank"])
+        # Overall Rank
+        overall_stats = TeamStatistics.objects.all().order_by("-total_points", "-tournament_wins", "-scrim_wins")
+        for idx, s in enumerate(overall_stats, 1):
+            s.rank = idx
+            s.save(update_fields=["rank"])
 
-    # Clear leaderboard cache
-    cache.delete("leaderboard:top50")
+        # Tournament Rank
+        t_stats = TeamStatistics.objects.annotate(
+            t_total=F("tournament_position_points") + F("tournament_kill_points")
+        ).order_by("-t_total", "-tournament_wins", "-tournament_kill_points")
+        for idx, s in enumerate(t_stats, 1):
+            s.tournament_rank = idx
+            s.save(update_fields=["tournament_rank"])
 
-    return {"teams_updated": teams.count(), "timestamp": timezone.now().isoformat()}
+        # Scrim Rank
+        s_stats = TeamStatistics.objects.annotate(s_total=F("scrim_position_points") + F("scrim_kill_points")).order_by(
+            "-s_total", "-scrim_wins", "-scrim_kill_points"
+        )
+        for idx, s in enumerate(s_stats, 1):
+            s.scrim_rank = idx
+            s.save(update_fields=["scrim_rank"])
+
+    # Clear cache
+    cache.delete_pattern("leaderboard:*")
+
+    logger.info(f"Updated {teams_updated} teams statistics and ranks.")
+    return {"teams_updated": teams_updated, "timestamp": timezone.now().isoformat()}

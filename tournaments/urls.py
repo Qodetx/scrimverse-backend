@@ -81,6 +81,8 @@ urlpatterns = [
     path(
         "<int:tournament_id>/rounds/<int:round_number>/groups/", RoundGroupsListView.as_view(), name="round-groups-list"
     ),
+    path("<int:tournament_id>/rounds/<int:round_number>/results/", RoundResultsView.as_view(), name="round-results"),
+    # Match Management (Old Implementation)
     path("<int:tournament_id>/groups/<int:group_id>/matches/start/", StartMatchView.as_view(), name="start-match"),
     path("<int:tournament_id>/matches/<int:match_id>/end/", EndMatchView.as_view(), name="end-match"),
     path(
@@ -88,7 +90,6 @@ urlpatterns = [
         SubmitMatchScoresView.as_view(),
         name="submit-match-scores",
     ),
-    path("<int:tournament_id>/rounds/<int:round_number>/results/", RoundResultsView.as_view(), name="round-results"),
     # Scrim endpoints
     path("scrims/", ScrimListView.as_view(), name="scrim-list"),
     path("scrims/<int:pk>/", ScrimDetailView.as_view(), name="scrim-detail"),

@@ -520,13 +520,21 @@ class TeamViewSet(viewsets.ModelViewSet):
         return [permissions.IsAuthenticated()]
 
     def get_queryset(self):
-        # For list action (search), return all teams
-        # For other actions, return only teams where user is a member or captain
-        if self.action == "list" or self.action == "retrieve":
+        # For list action, check for "mine" parameter to filter by user's teams
+        if self.action == "list":
+            mine = self.request.query_params.get("mine") == "true"
+            if mine:
+                return Team.objects.filter(
+                    models.Q(captain=self.request.user) | models.Q(members__user=self.request.user)
+                ).distinct()
             return Team.objects.all()
-        return Team.objects.filter(
-            models.Q(captain=self.request.user) | models.Q(members__user=self.request.user)
-        ).distinct()
+
+        # For retrieve, return all teams (public view)
+        if self.action == "retrieve":
+            return Team.objects.all()
+
+        # For other actions (update, delete, etc.), only teams where user is captain
+        return Team.objects.filter(captain=self.request.user)
 
     def perform_create(self, serializer):
         # Check if user is already in a PERMANENT team (temporary teams are allowed)

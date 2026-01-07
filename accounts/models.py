@@ -104,15 +104,28 @@ class Team(models.Model):
 class TeamStatistics(models.Model):
     """
     Leaderboard statistics for teams
-    Tracks tournament wins and cumulative points across all matches
+    Tracks tournament and scrim wins and cumulative points separately
     """
 
     team = models.OneToOneField(Team, on_delete=models.CASCADE, related_name="statistics")
+
+    # Tournament Statistics
     tournament_wins = models.IntegerField(default=0, help_text="Number of tournament victories (1st place finishes)")
+    tournament_position_points = models.IntegerField(default=0, help_text="Position points from tournaments only")
+    tournament_kill_points = models.IntegerField(default=0, help_text="Kill points from tournaments only")
+
+    # Scrim Statistics
+    scrim_wins = models.IntegerField(default=0, help_text="Number of scrim victories (1st place finishes)")
+    scrim_position_points = models.IntegerField(default=0, help_text="Position points from scrims only")
+    scrim_kill_points = models.IntegerField(default=0, help_text="Kill points from scrims only")
+
+    # Combined Statistics (for backward compatibility)
     total_position_points = models.IntegerField(default=0, help_text="Cumulative position points from all matches")
     total_kill_points = models.IntegerField(default=0, help_text="Cumulative kill points from all matches")
     total_points = models.IntegerField(default=0, help_text="Total points (position + kill)")
-    rank = models.IntegerField(default=0, help_text="Global leaderboard rank")
+    rank = models.IntegerField(default=0, help_text="Total (overall) leaderboard rank")
+    tournament_rank = models.IntegerField(default=0, help_text="Tournament leaderboard rank")
+    scrim_rank = models.IntegerField(default=0, help_text="Scrim leaderboard rank")
     last_updated = models.DateTimeField(auto_now=True)
 
     def update_total_points(self):

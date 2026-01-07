@@ -5,7 +5,7 @@ from rest_framework import serializers
 from accounts.models import PlayerProfile, User
 from accounts.serializers import HostProfileSerializer, PlayerProfileSerializer
 
-from .models import HostRating, Scrim, ScrimRegistration, Tournament, TournamentRegistration
+from .models import HostRating, Match, MatchScore, Scrim, ScrimRegistration, Tournament, TournamentRegistration
 
 
 class TournamentSerializer(serializers.ModelSerializer):
@@ -38,8 +38,14 @@ class TournamentSerializer(serializers.ModelSerializer):
         return value
 
     def validate_max_participants(self, value):
-        """Validate max participants based on plan type"""
-        plan_type = self.initial_data.get("plan_type", "basic")
+        """Validate max participants based on plan type and event mode"""
+        data = self.initial_data
+        event_mode = data.get("event_mode", "TOURNAMENT")
+
+        if event_mode == "SCRIM" and value > 25:
+            raise serializers.ValidationError("Scrims allow maximum 25 teams.")
+
+        plan_type = data.get("plan_type", "basic")
         if plan_type == "basic" and value > 100:
             raise serializers.ValidationError(
                 "Basic plan allows maximum 100 teams. Upgrade to Featured or Premium plan for unlimited teams."
@@ -48,11 +54,21 @@ class TournamentSerializer(serializers.ModelSerializer):
 
     def validate_rounds(self, value):
         """Validate rounds structure"""
+        event_mode = self.initial_data.get("event_mode", "TOURNAMENT")
+
         if isinstance(value, str):
             try:
                 value = json.loads(value)
             except json.JSONDecodeError:
                 raise serializers.ValidationError("Invalid JSON format for rounds")
+
+        if event_mode == "SCRIM":
+            # For Scrims, we force 1 round
+            max_teams = self.initial_data.get("max_participants")
+            if not max_teams and self.instance:
+                max_teams = self.instance.max_participants
+
+            return [{"round": 1, "max_teams": int(max_teams) if max_teams else 25, "qualifying_teams": 0}]
 
         if not value or len(value) == 0:
             raise serializers.ValidationError("At least one round is required")
@@ -68,6 +84,21 @@ class TournamentSerializer(serializers.ModelSerializer):
                     raise serializers.ValidationError(f"Round {i+1} must have 'qualifying_teams' field")
 
         return value
+
+    def validate(self, attrs):
+        """Root level validation for Tournament"""
+        event_mode = attrs.get("event_mode", "TOURNAMENT")
+
+        if event_mode == "SCRIM":
+            # Additional Scrim validations
+            max_matches = attrs.get("max_matches", 4)
+            if max_matches > 4:
+                raise serializers.ValidationError({"max_matches": "Scrims support a maximum of 4 matches."})
+
+            # Scrims must have entry_fee >= 0 and basic plan
+            attrs["plan_type"] = "basic"
+
+        return attrs
 
 
 class TournamentListSerializer(serializers.ModelSerializer):
@@ -95,6 +126,7 @@ class TournamentListSerializer(serializers.ModelSerializer):
             "is_featured",
             "plan_type",
             "homepage_banner",
+            "event_mode",
         )
 
     def get_host(self, obj):
@@ -401,3 +433,64 @@ class HostRatingSerializer(serializers.ModelSerializer):
         if value < 1 or value > 5:
             raise serializers.ValidationError("Rating must be between 1 and 5")
         return value
+
+
+class MatchScoreSerializer(serializers.ModelSerializer):
+    """Serializer for match scores"""
+
+    team_name = serializers.CharField(source="team.team_name", read_only=True)
+    team_id = serializers.IntegerField(source="team.id", read_only=True)
+
+    class Meta:
+        model = MatchScore
+        fields = ["id", "team_id", "team_name", "wins", "position_points", "kill_points", "total_points"]
+        read_only_fields = ["id", "total_points"]
+
+
+class MatchSerializer(serializers.ModelSerializer):
+    """Serializer for match details"""
+
+    scores = MatchScoreSerializer(many=True, read_only=True)
+    can_edit_room = serializers.SerializerMethodField()
+    can_edit_scores = serializers.SerializerMethodField()
+    can_start = serializers.SerializerMethodField()
+    can_end = serializers.SerializerMethodField()
+    can_cancel = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Match
+        fields = [
+            "id",
+            "match_number",
+            "match_id",
+            "match_password",
+            "status",
+            "started_at",
+            "ended_at",
+            "created_at",
+            "scores",
+            "can_edit_room",
+            "can_edit_scores",
+            "can_start",
+            "can_end",
+            "can_cancel",
+        ]
+        read_only_fields = ["id", "status", "started_at", "ended_at", "created_at"]
+
+    def get_can_edit_room(self, obj):
+        return obj.can_edit_room_details()
+
+    def get_can_edit_scores(self, obj):
+        return obj.can_edit_scores()
+
+    def get_can_start(self, obj):
+        can_start, _ = obj.can_start_match()
+        return can_start
+
+    def get_can_end(self, obj):
+        can_end, _ = obj.can_end_match()
+        return can_end
+
+    def get_can_cancel(self, obj):
+        can_cancel, _ = obj.can_cancel_match()
+        return can_cancel
