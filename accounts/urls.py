@@ -3,8 +3,8 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from .leaderboard_views import LeaderboardView, TeamRankView
-from .views import (
+from accounts.leaderboard_views import LeaderboardView, TeamRankView
+from accounts.views import (
     CurrentHostProfileView,
     CurrentPlayerProfileView,
     CurrentUserView,

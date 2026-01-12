@@ -1,4 +1,5 @@
 from django.db import models
+from django.db.models import Sum
 from django.utils import timezone
 
 from accounts.models import HostProfile, PlayerProfile, Team
@@ -18,10 +19,9 @@ class Tournament(models.Model):
 
     GAME_CHOICES = (
         ("BGMI", "BGMI"),
-        ("Valorant", "Valorant"),
         ("COD", "Call of Duty"),
         ("Freefire", "Free Fire"),
-        ("CS2", "Counter-Strike 2"),
+        ("Scarfall", "Scarfall"),
     )
 
     GAME_FORMAT_CHOICES = (
@@ -339,8 +339,6 @@ class RoundScore(models.Model):
         """
         Calculate total points from all match scores in this round's groups
         """
-        from django.db.models import Sum
-
         match_totals = MatchScore.objects.filter(
             match__group__tournament=self.tournament, match__group__round_number=self.round_number, team=self.team
         ).aggregate(total_pp=Sum("position_points"), total_kp=Sum("kill_points"))
@@ -383,8 +381,6 @@ class Group(models.Model):
 
     def get_qualified_teams(self):
         """Get the top K teams from this group based on round scores"""
-        from django.db.models import Sum
-
         # Get all teams in this group with their total points
         team_scores = []
         for team in self.teams.all():
@@ -429,119 +425,6 @@ class Match(models.Model):
 
     def __str__(self):
         return f"{self.group.group_name} - Match {self.match_number}"
-
-    def can_edit_room_details(self):
-        """
-        Check if room ID and password can be edited.
-        For scrims: Only editable when status is 'waiting'
-        """
-        return self.status == "waiting"
-
-    def can_edit_scores(self):
-        """
-        Check if match scores can be edited.
-        Rules:
-        - Cannot edit if status is 'waiting'
-        - Cannot edit if completed and past grace period (15 min)
-        - For scrims: Cannot edit if next match has started
-        """
-        from datetime import timedelta
-
-        from django.utils import timezone
-
-        if self.status == "waiting":
-            return False
-
-        # Check grace period for completed matches
-        if self.status == "completed" and self.ended_at:
-            grace_period = timedelta(minutes=15)
-            if timezone.now() - self.ended_at > grace_period:
-                return False
-
-        # Scrim-specific: Lock if next match has started
-        if self.group.tournament.event_mode == "SCRIM":
-            next_match_started = Match.objects.filter(
-                group=self.group, match_number=self.match_number + 1, status__in=["live", "completed"]
-            ).exists()
-            if next_match_started:
-                return False
-
-        return True
-
-    def can_start_match(self):
-        """
-        Check if match can be started.
-        Preconditions:
-        - Status must be 'waiting'
-        - Room ID and password must be set
-        - At least 2 teams registered in the tournament
-        """
-        if self.status != "waiting":
-            return False, "Match has already started or completed"
-
-        if not self.match_id or not self.match_password:
-            return False, "Room ID and Password must be set before starting"
-
-        registered_teams = self.group.tournament.registrations.filter(status="confirmed").count()
-        if registered_teams < 2:
-            return False, "At least 2 teams must be registered"
-
-        return True, "Match can be started"
-
-    def can_end_match(self):
-        """
-        Check if match can be ended.
-        Preconditions:
-        - Status must be 'live'
-        - Match must have been live for at least 5 minutes
-        - All participating teams should have scores (or be marked DNS/DQ)
-        """
-        from datetime import timedelta
-
-        from django.utils import timezone
-
-        if self.status != "live":
-            return False, "Match is not currently live"
-
-        if self.started_at:
-            min_duration = timedelta(minutes=5)
-            if timezone.now() - self.started_at < min_duration:
-                return False, "Match must be live for at least 5 minutes before ending"
-
-        # Check if all teams have scores
-        registered_teams = self.group.teams.all()
-        teams_with_scores = self.scores.values_list("team", flat=True)
-
-        missing_scores = registered_teams.exclude(id__in=teams_with_scores)
-        if missing_scores.exists():
-            return False, f"{missing_scores.count()} team(s) missing scores"
-
-        return True, "Match can be ended"
-
-    def can_cancel_match(self):
-        """
-        Check if match can be cancelled (rolled back to waiting).
-        Only allowed if:
-        - Status is 'live'
-        - No scores have been submitted
-        - Match has been live for less than 10 minutes
-        """
-        from datetime import timedelta
-
-        from django.utils import timezone
-
-        if self.status != "live":
-            return False, "Only live matches can be cancelled"
-
-        if self.scores.exists():
-            return False, "Cannot cancel match after scores have been submitted"
-
-        if self.started_at:
-            max_cancel_duration = timedelta(minutes=10)
-            if timezone.now() - self.started_at > max_cancel_duration:
-                return False, "Cannot cancel match after 10 minutes"
-
-        return True, "Match can be cancelled"
 
 
 class MatchScore(models.Model):

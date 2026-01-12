@@ -79,6 +79,10 @@ class Team(models.Model):
     """
 
     name = models.CharField(max_length=100)
+    description = models.TextField(blank=True, default="WE ARE BEAST", help_text="Team tagline or description")
+    profile_picture = models.ImageField(
+        upload_to="teams/", blank=True, null=True, help_text="Team logo/profile picture"
+    )
     captain = models.ForeignKey(User, on_delete=models.CASCADE, related_name="managed_teams")
     created_at = models.DateTimeField(auto_now_add=True)
     is_temporary = models.BooleanField(default=False, help_text="True if created for a single tournament")
@@ -172,9 +176,15 @@ class TeamJoinRequest(models.Model):
         ("rejected", "Rejected"),
     )
 
+    TYPE_CHOICES = (
+        ("request", "Request"),
+        ("invite", "Invite"),
+    )
+
     team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="join_requests")
     player = models.ForeignKey(User, on_delete=models.CASCADE, related_name="team_join_requests")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    request_type = models.CharField(max_length=20, choices=TYPE_CHOICES, default="request")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

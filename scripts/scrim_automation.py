@@ -1,3 +1,4 @@
+import json
 import random
 import string
 from datetime import datetime, timedelta
@@ -221,8 +222,6 @@ def create_scrim(token, game_mode, max_teams, max_matches=4, prize_pool=5000):
     try:
         with open(BANNER_IMAGE_PATH, "rb") as img:
             files = {"banner_image": ("download.jpeg", img, "image/jpeg")}
-            import json
-
             form_data = data.copy()
             form_data["rounds"] = json.dumps(data["rounds"])
 
@@ -233,7 +232,7 @@ def create_scrim(token, game_mode, max_teams, max_matches=4, prize_pool=5000):
 
     res = res.json()
     print(
-        f"Scrim Created: {res['title']} | ID: {res['id']} | Mode: {game_mode} | Max Teams: {max_teams} | Matches: {max_matches}"
+        f"Scrim Created: {res['title']} | ID: {res['id']} | Mode: {game_mode} | Max Teams: {max_teams} | Matches: {max_matches}"  # noqa: E501
     )
     return res["id"]
 

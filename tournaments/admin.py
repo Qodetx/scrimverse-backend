@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import (
+from tournaments.models import (
     Group,
     HostRating,
     Match,

@@ -9,7 +9,7 @@ import factory
 from factory.django import DjangoModelFactory
 from faker import Faker
 
-from accounts.models import HostProfile, PlayerProfile, User
+from accounts.models import HostProfile, PlayerProfile, Team, TeamStatistics, User
 from tournaments.models import HostRating, Scrim, ScrimRegistration, Tournament, TournamentRegistration
 
 fake = Faker()
@@ -62,7 +62,7 @@ class TournamentFactory(DjangoModelFactory):
     host = factory.SubFactory(HostProfileFactory)
     title = factory.LazyAttribute(lambda _: f"{fake.catch_phrase()} Tournament")
     description = factory.LazyAttribute(lambda _: fake.text(max_nb_chars=500))
-    game_name = factory.Iterator(["BGMI", "Free Fire", "Call of Duty", "Valorant", "PUBG"])
+    game_name = factory.Iterator(["BGMI", "COD", "Freefire", "Scarfall"])
     game_mode = "Squad"  # Default to Squad mode for consistent testing
     max_participants = factory.Iterator([50, 100, 150, 200])
     current_participants = 0
@@ -117,7 +117,7 @@ class ScrimFactory(DjangoModelFactory):
     host = factory.SubFactory(HostProfileFactory)
     title = factory.LazyAttribute(lambda _: f"{fake.catch_phrase()} Scrim")
     description = factory.LazyAttribute(lambda _: fake.text(max_nb_chars=300))
-    game_name = factory.Iterator(["BGMI", "Free Fire", "Call of Duty", "Valorant"])
+    game_name = factory.Iterator(["BGMI", "COD", "Freefire", "Scarfall"])
     game_mode = factory.Iterator(["Solo", "Duo", "Squad"])
     max_participants = factory.Iterator([20, 30, 50])
     current_participants = 0
@@ -188,3 +188,32 @@ class HostRatingFactory(DjangoModelFactory):
     player = factory.SubFactory(PlayerProfileFactory)
     rating = factory.Iterator([1, 2, 3, 4, 5])
     review = factory.LazyAttribute(lambda _: fake.text(max_nb_chars=200))
+
+
+class TeamFactory(DjangoModelFactory):
+    """Factory for Team model"""
+
+    class Meta:
+        model = Team
+
+    name = factory.LazyAttribute(lambda _: f"{fake.word().capitalize()} {fake.word().capitalize()}")
+    captain = factory.SubFactory(UserFactory, user_type="player")
+    description = factory.LazyAttribute(lambda _: fake.text(max_nb_chars=200))
+    is_temporary = False
+
+
+class TeamStatisticsFactory(DjangoModelFactory):
+    """Factory for TeamStatistics model"""
+
+    class Meta:
+        model = TeamStatistics
+
+    team = factory.SubFactory(TeamFactory)
+    tournament_position_points = 0
+    tournament_kill_points = 0
+    tournament_wins = 0
+    tournament_rank = 0
+    scrim_position_points = 0
+    scrim_kill_points = 0
+    scrim_wins = 0
+    scrim_rank = 0

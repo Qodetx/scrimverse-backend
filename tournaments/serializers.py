@@ -2,10 +2,17 @@ import json
 
 from rest_framework import serializers
 
-from accounts.models import PlayerProfile, User
+from accounts.models import PlayerProfile, Team, TeamMember, User
 from accounts.serializers import HostProfileSerializer, PlayerProfileSerializer
-
-from .models import HostRating, Match, MatchScore, Scrim, ScrimRegistration, Tournament, TournamentRegistration
+from tournaments.models import (
+    HostRating,
+    Match,
+    MatchScore,
+    Scrim,
+    ScrimRegistration,
+    Tournament,
+    TournamentRegistration,
+)
 
 
 class TournamentSerializer(serializers.ModelSerializer):
@@ -180,11 +187,31 @@ class TournamentRegistrationSerializer(serializers.ModelSerializer):
     )
     team_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
     save_as_team = serializers.BooleanField(write_only=True, default=False)
+    performance = serializers.SerializerMethodField()
 
     class Meta:
         model = TournamentRegistration
         fields = "__all__"
-        read_only_fields = ("player", "tournament", "registered_at", "updated_at", "team_members")
+        read_only_fields = ("player", "tournament", "registered_at", "updated_at", "team_members", "performance")
+
+    def get_performance(self, obj):
+        # Aggregate scores for this registration
+        scores = MatchScore.objects.filter(team=obj)
+        total_kills = sum(s.kill_points for s in scores)
+        total_points = sum(s.total_points for s in scores)
+
+        # Try to find placement
+        # If the tournament is completed, we might have final placement in winners JSON
+        placement = "N/A"
+        tournament = obj.tournament
+        if tournament.status == "completed" and tournament.winners:
+            # Check each round for winners
+            for round_num, winner_id in tournament.winners.items():
+                if winner_id == obj.id:
+                    placement = f"#{1}"  # Winner of that round (if it's the final round)
+                    break
+
+        return {"kills": total_kills, "points": total_points, "placement": placement}
 
     def validate_player_usernames(self, value):
         # Check for duplicates
@@ -228,7 +255,6 @@ class TournamentRegistrationSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         """Create registration with team logic"""
-        from accounts.models import Team, TeamMember
 
         player_usernames = validated_data.pop("player_usernames", [])
         team_name = validated_data.pop("team_name", None)
@@ -351,8 +377,6 @@ class ScrimRegistrationSerializer(serializers.ModelSerializer):
         read_only_fields = ("player", "scrim", "registered_at", "updated_at", "team_members")
 
     def create(self, validated_data):
-        from accounts.models import Team, TeamMember
-
         player_usernames = validated_data.pop("player_usernames")
         team_name = validated_data.pop("team_name")
         save_as_team = validated_data.pop("save_as_team", False)
@@ -440,10 +464,33 @@ class MatchScoreSerializer(serializers.ModelSerializer):
 
     team_name = serializers.CharField(source="team.team_name", read_only=True)
     team_id = serializers.IntegerField(source="team.id", read_only=True)
+    profile_picture = serializers.SerializerMethodField()
+
+    def get_profile_picture(self, obj):
+        """Get team profile picture URL"""
+        try:
+            # obj.team is a TournamentRegistration instance
+            # obj.team.team is the Team instance
+            if obj.team and hasattr(obj.team, "team") and obj.team.team:
+                if obj.team.team.profile_picture:
+                    return obj.team.team.profile_picture.url
+        except Exception:
+            # Silently handle errors to avoid breaking serialization
+            pass
+        return None
 
     class Meta:
         model = MatchScore
-        fields = ["id", "team_id", "team_name", "wins", "position_points", "kill_points", "total_points"]
+        fields = [
+            "id",
+            "team_id",
+            "team_name",
+            "profile_picture",
+            "wins",
+            "position_points",
+            "kill_points",
+            "total_points",
+        ]
         read_only_fields = ["id", "total_points"]
 
 

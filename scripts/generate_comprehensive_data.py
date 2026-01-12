@@ -1,3 +1,5 @@
+# flake8: noqa
+
 """
 Comprehensive Tournament and Scrim Data Generation Script
 Creates 60 teams (240 players), 3 completed tournaments, 2 completed scrims,
@@ -7,7 +9,7 @@ Creates 60 teams (240 players), 3 completed tournaments, 2 completed scrims,
 import os
 import random
 import sys
-from datetime import datetime, timedelta
+from datetime import timedelta
 from decimal import Decimal
 
 import django
@@ -27,8 +29,14 @@ from tournaments.models import Group, Match, MatchScore, RoundScore, Tournament,
 User = get_user_model()
 
 # Game configurations
-GAMES = ["BGMI", "Free Fire", "Valorant"]
-GAME_MODES = {"BGMI": ["Squad", "Duo"], "Free Fire": ["Squad", "Duo"], "Valorant": ["5v5"]}
+GAMES = ["BGMI", "COD", "Freefire", "Scarfall"]
+GAME_MODES = {
+    "BGMI": ["Squad", "Duo"],
+    "COD": ["Squad", "Duo"],
+    "Freefire": ["Squad", "Duo"],
+    "Scarfall": ["Squad", "Duo"],
+}
+
 
 # Team name prefixes and suffixes for variety
 TEAM_PREFIXES = [

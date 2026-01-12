@@ -1,7 +1,7 @@
 import logging
 
 from django.core.cache import cache
-from django.db.models import Sum
+from django.db.models import Q, Sum
 from django.utils import timezone
 
 from rest_framework import generics, parsers, permissions
@@ -9,10 +9,10 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import HostProfile, PlayerProfile, User
-
-from .models import HostRating, RoundScore, Scrim, ScrimRegistration, Tournament, TournamentRegistration
-from .serializers import (
+from accounts.models import HostProfile, PlayerProfile, TeamMember, User
+from accounts.tasks import update_host_rating_cache
+from tournaments.models import HostRating, RoundScore, Scrim, ScrimRegistration, Tournament, TournamentRegistration
+from tournaments.serializers import (
     HostRatingSerializer,
     ScrimListSerializer,
     ScrimRegistrationSerializer,
@@ -21,6 +21,7 @@ from .serializers import (
     TournamentRegistrationSerializer,
     TournamentSerializer,
 )
+from tournaments.tasks import update_host_dashboard_stats, update_leaderboard, update_platform_statistics
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,7 @@ class TournamentListView(generics.ListAPIView):
         game = self.request.query_params.get("game", None)
         category = self.request.query_params.get("category", None)
         event_mode = self.request.query_params.get("event_mode", None)
+        entry_fee = self.request.query_params.get("entry_fee", None)
 
         if status_param:
             queryset = queryset.filter(status=status_param)
@@ -97,6 +99,8 @@ class TournamentListView(generics.ListAPIView):
             queryset = queryset.filter(game_name__icontains=game)
         if event_mode:
             queryset = queryset.filter(event_mode=event_mode)
+        if entry_fee is not None:
+            queryset = queryset.filter(entry_fee=entry_fee)
 
         # Filter by category based on plan type
         if category == "all":
@@ -186,8 +190,14 @@ class TournamentCreateView(generics.CreateAPIView):
     def perform_create(self, serializer):
         host_profile = HostProfile.objects.get(user=self.request.user)
         serializer.save(host=host_profile)
-        # Invalidate tournament list cache
+
+        # Invalidate caches so next request gets fresh data
         cache.delete("tournaments:list:all")
+        cache.delete(f"host:dashboard:{host_profile.id}")  # Host dashboard
+        cache.delete("platform:statistics")  # Platform stats
+
+        # Trigger immediate cache refresh for this host
+        update_host_dashboard_stats.delay(host_profile.id)
 
 
 class TournamentUpdateView(generics.UpdateAPIView):
@@ -423,8 +433,11 @@ class TournamentRegistrationCreateView(generics.CreateAPIView):
         tournament.current_participants += 1
         tournament.save()
 
-        # Invalidate cache since participant count changed
+        # Invalidate caches since participant count changed
         cache.delete("tournaments:list:all")
+        cache.delete(f"host:dashboard:{tournament.host.id}")  # Host dashboard
+
+        update_host_dashboard_stats.delay(tournament.host.id)
 
 
 class ScrimRegistrationCreateView(generics.CreateAPIView):
@@ -440,6 +453,10 @@ class ScrimRegistrationCreateView(generics.CreateAPIView):
         player_profile = PlayerProfile.objects.get(user=self.request.user)
         scrim_id = self.kwargs["scrim_id"]
         scrim = Scrim.objects.get(id=scrim_id)
+
+        # Check if full
+        if scrim.current_participants >= scrim.max_participants:
+            raise ValidationError({"error": "Scrim is full"})
 
         # Check if already registered
         if ScrimRegistration.objects.filter(scrim=scrim, player=player_profile).exists():
@@ -462,8 +479,44 @@ class PlayerTournamentRegistrationsView(generics.ListAPIView):
     permission_classes = [IsPlayerUser]
 
     def get_queryset(self):
-        player_profile = PlayerProfile.objects.get(user=self.request.user)
-        return TournamentRegistration.objects.filter(player=player_profile)
+        try:
+            player_profile = PlayerProfile.objects.get(user=self.request.user)
+            team_ids = TeamMember.objects.filter(user=self.request.user).values_list("team_id", flat=True)
+            return (
+                TournamentRegistration.objects.filter(Q(player=player_profile) | Q(team_id__in=team_ids))
+                .distinct()
+                .order_by("-registered_at")
+            )
+        except PlayerProfile.DoesNotExist:
+            return TournamentRegistration.objects.none()
+
+
+class PlayerPublicRegistrationsView(generics.ListAPIView):
+    """
+    Get all tournament registrations for any player publicly
+    GET /api/tournaments/player/<player_id>/registrations/
+    """
+
+    serializer_class = TournamentRegistrationSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        player_id = self.kwargs["player_id"]
+
+        try:
+            player = PlayerProfile.objects.get(id=player_id)
+            user = player.user
+            team_ids = TeamMember.objects.filter(user=user).values_list("team_id", flat=True)
+
+            queryset = TournamentRegistration.objects.filter(
+                Q(player_id=player_id) | Q(team_id__in=team_ids)
+            ).distinct()
+        except PlayerProfile.DoesNotExist:
+            return TournamentRegistration.objects.none()
+
+        if self.request.query_params.get("confirmed") == "true":
+            queryset = queryset.filter(status="confirmed")
+        return queryset.order_by("-registered_at")
 
 
 class PlayerScrimRegistrationsView(generics.ListAPIView):
@@ -498,6 +551,7 @@ class HostRatingCreateView(generics.CreateAPIView):
         host_profile = HostProfile.objects.get(id=host_id)
 
         serializer.save(player=player_profile, host=host_profile)
+        update_host_rating_cache.delay(host_profile.id)
 
 
 class HostRatingsListView(generics.ListAPIView):
@@ -958,7 +1012,7 @@ class TournamentStatsView(generics.GenericAPIView):
         # Aggregate scores for all teams across all rounds
         team_scores = (
             RoundScore.objects.filter(tournament=tournament)
-            .values("team__id", "team__team_name", "team__player__in_game_name")
+            .values("team__id", "team__team_name", "team__player__user__username")
             .annotate(
                 total_position_points=Sum("position_points"),
                 total_kill_points=Sum("kill_points"),
@@ -974,8 +1028,8 @@ class TournamentStatsView(generics.GenericAPIView):
                 {
                     "rank": idx,
                     "team_id": entry["team__id"],
-                    "team_name": entry["team__team_name"] or entry["team__player__in_game_name"],
-                    "player_name": entry["team__player__in_game_name"],
+                    "team_name": entry["team__team_name"] or entry["team__player__user__username"],
+                    "player_name": entry["team__player__user__username"],
                     "total_position_points": entry["total_position_points"],
                     "total_kill_points": entry["total_kill_points"],
                     "total_points": entry["total_points"],
@@ -1042,8 +1096,6 @@ class EndTournamentView(generics.GenericAPIView):
     permission_classes = [IsHostUser]
 
     def post(self, request, tournament_id):
-        from .tasks import update_leaderboard
-
         host_profile = HostProfile.objects.get(user=request.user)
         tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
 
@@ -1084,28 +1136,24 @@ class PlatformStatsView(generics.GenericAPIView):
     permission_classes = [permissions.AllowAny]
 
     def get(self, request):
-        # Total tournaments
-        total_tournaments = Tournament.objects.count()
+        # Try cache first (populated by Celery task every hour)
+        stats = cache.get("platform:statistics")
 
-        # Total players (unique player profiles)
-        total_players = PlayerProfile.objects.count()
+        if not stats:
+            update_platform_statistics.delay()
 
-        # Total prize money distributed (sum of prize pools from completed tournaments)
-        total_prize_money = (
-            Tournament.objects.filter(status="completed").aggregate(total=Sum("prize_pool"))["total"] or 0
-        )
-
-        # Total registrations
-        total_registrations = TournamentRegistration.objects.count()
-
-        return Response(
-            {
-                "total_tournaments": total_tournaments,
-                "total_players": total_players,
-                "total_prize_money": str(total_prize_money),
-                "total_registrations": total_registrations,
+            # Return basic stats as fallback while calculating
+            stats = {
+                "total_tournaments": Tournament.objects.count(),
+                "total_players": PlayerProfile.objects.count(),
+                "total_prize_money": str(
+                    Tournament.objects.filter(status="completed").aggregate(total=Sum("prize_pool"))["total"] or 0
+                ),
+                "total_registrations": TournamentRegistration.objects.count(),
+                "message": "Full statistics are being calculated in the background...",
             }
-        )
+
+        return Response(stats)
 
 
 class UpdateTeamStatusView(generics.GenericAPIView):
@@ -1198,8 +1246,6 @@ class StartTournamentView(generics.GenericAPIView):
         TournamentRegistration.objects.filter(tournament=tournament, status="pending").update(status="confirmed")
 
         # Check if starting early
-        from django.utils import timezone
-
         now = timezone.now()
         is_early = now < tournament.tournament_start
 
@@ -1235,68 +1281,37 @@ class HostDashboardStatsView(APIView):
 
     def get(self, request):
         host_profile = HostProfile.objects.get(user=request.user)
-        now = timezone.now()
-        one_week_ago = now - timezone.timedelta(days=7)
-        one_month_ago = now - timezone.timedelta(days=30)
 
-        # Basic Stats
-        active_tournaments = Tournament.objects.filter(host=host_profile, status__in=["upcoming", "ongoing"]).count()
-        live_now_count = Tournament.objects.filter(host=host_profile, status="ongoing").count()
+        # Try cache first (populated by Celery task every 10 minutes)
+        stats = cache.get(f"host:dashboard:{host_profile.id}")
 
-        total_tournaments = Tournament.objects.filter(host=host_profile).count()
+        if not stats:
+            # Cache miss - trigger async calculation
+            update_host_dashboard_stats.delay(host_profile.id)
 
-        # Total participants (confirmed teams)
-        total_participants = TournamentRegistration.objects.filter(
-            tournament__host=host_profile, status="confirmed"
-        ).count()
+            # Return basic stats as fallback while calculating
+            stats = {
+                "active_tournaments": Tournament.objects.filter(
+                    host=host_profile, status__in=["upcoming", "ongoing"]
+                ).count(),
+                "live_now_count": Tournament.objects.filter(host=host_profile, status="ongoing").count(),
+                "total_tournaments": Tournament.objects.filter(host=host_profile).count(),
+                "total_participants": 0,
+                "participants_weekly_growth": 0,
+                "total_revenue": 0,
+                "revenue_monthly_growth": 0,
+                "avg_participation": 0,
+                "message": "Full statistics are being calculated in the background...",
+            }
 
-        # Growth this week
-        participants_this_week = TournamentRegistration.objects.filter(
-            tournament__host=host_profile, status="confirmed", registered_at__gte=one_week_ago
-        ).count()
-
-        # Revenue (Sum of entry fees for confirmed registrations)
-        revenue_tournaments = (
-            TournamentRegistration.objects.filter(tournament__host=host_profile, status="confirmed").aggregate(
-                total=Sum("tournament__entry_fee")
-            )["total"]
-            or 0
-        )
-        revenue_scrims = (
-            ScrimRegistration.objects.filter(scrim__host=host_profile, status="confirmed").aggregate(
-                total=Sum("scrim__entry_fee")
-            )["total"]
-            or 0
-        )
-        total_revenue = revenue_tournaments + revenue_scrims
-
-        # Monthly growth (Revenue in last 30 days)
-        rev_tournaments_month = (
-            TournamentRegistration.objects.filter(
-                tournament__host=host_profile, status="confirmed", registered_at__gte=one_month_ago
-            ).aggregate(total=Sum("tournament__entry_fee"))["total"]
-            or 0
-        )
-        rev_scrims_month = (
-            ScrimRegistration.objects.filter(
-                scrim__host=host_profile, status="confirmed", registered_at__gte=one_month_ago
-            ).aggregate(total=Sum("scrim__entry_fee"))["total"]
-            or 0
-        )
-        growth_this_month = rev_tournaments_month + rev_scrims_month
-
-        # Avg Participation
-        avg_participation = (total_participants / total_tournaments) if total_tournaments > 0 else 0
-
-        # Live Tournaments
+        # Always fetch live tournaments and recent activity (these change frequently)
         live_tournaments = Tournament.objects.filter(host=host_profile, status="ongoing")
         live_serializer = TournamentListSerializer(live_tournaments, many=True)
 
-        # Upcoming Tournaments
         upcoming_tournaments = Tournament.objects.filter(host=host_profile, status="upcoming")[:5]
         upcoming_serializer = TournamentListSerializer(upcoming_tournaments, many=True)
 
-        # Recent Activity (Mocked or aggregated from registrations)
+        # Recent Activity
         recent_registrations = TournamentRegistration.objects.filter(tournament__host=host_profile).order_by(
             "-registered_at"
         )[:5]
@@ -1307,12 +1322,12 @@ class HostDashboardStatsView(APIView):
                 {
                     "type": "registration",
                     "message": f"New team registered for {reg.tournament.title}",
-                    "team_name": reg.team_name or reg.player.in_game_name,
+                    "team_name": reg.team_name or reg.player.user.username,
                     "timestamp": reg.registered_at,
                 }
             )
 
-        # Add some mock activities if not enough real ones
+        # Add welcome message if not enough activity
         if len(recent_activity) < 3:
             recent_activity.append(
                 {
@@ -1324,16 +1339,7 @@ class HostDashboardStatsView(APIView):
 
         return Response(
             {
-                "stats": {
-                    "active_tournaments": active_tournaments,
-                    "live_now_count": live_now_count,
-                    "total_participants": total_participants,
-                    "participants_weekly_growth": participants_this_week,
-                    "total_revenue": total_revenue,
-                    "revenue_monthly_growth": growth_this_month,
-                    "avg_participation": round(avg_participation, 1),
-                    "growth_percentage": 12.5,  # Mock growth percentage
-                },
+                "stats": stats,
                 "live_tournaments": live_serializer.data,
                 "upcoming_tournaments": upcoming_serializer.data,
                 "recent_activity": recent_activity,

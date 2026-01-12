@@ -1,10 +1,12 @@
 """
 Pytest fixtures and configuration for Scrimverse tests
 """
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 
 import pytest
+import redis
 from rest_framework.test import APIClient
 
 from tests.factories import (
@@ -24,10 +26,6 @@ User = get_user_model()
 def redis_available():
     """Check if Redis server is running"""
     try:
-        from django.conf import settings
-
-        import redis
-
         # Try to connect to Redis
         r = redis.Redis(
             host=settings.REDIS_HOST,

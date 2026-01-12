@@ -8,10 +8,9 @@ from rest_framework import generics, permissions
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from accounts.models import HostProfile, PlayerProfile
-
-from .models import Group, Match, MatchScore, Tournament, TournamentRegistration
-from .services import TournamentGroupService
+from accounts.models import HostProfile, PlayerProfile, TeamMember
+from tournaments.models import Group, Match, MatchScore, Tournament, TournamentRegistration
+from tournaments.services import TournamentGroupService
 
 
 class IsHostUser(permissions.BasePermission):
@@ -144,7 +143,7 @@ class ConfigureRoundView(generics.GenericAPIView):
 
         return Response(
             {
-                "message": f"{'Scrim' if is_scrim else 'Round ' + str(round_number)} configured successfully ({num_groups} group created)",
+                "message": f"{'Scrim' if is_scrim else 'Round ' + str(round_number)} configured successfully ({num_groups} group created)",  # noqa: E501
                 "num_groups": num_groups,
                 "teams_distribution": teams_distribution,
                 "total_qualifying": total_qualifying,
@@ -179,8 +178,19 @@ class RoundGroupsListView(generics.GenericAPIView):
             try:
                 player_profile = PlayerProfile.objects.get(user=request.user)
                 tournament = Tournament.objects.get(id=tournament_id)
-                # Verify player is registered for this tournament
-                if not TournamentRegistration.objects.filter(tournament=tournament, player=player_profile).exists():
+
+                # Check if player is registered as captain OR is a member of a registered team
+                is_captain = TournamentRegistration.objects.filter(
+                    tournament=tournament, player=player_profile
+                ).exists()
+
+                # Check if player is a team member of any registered team
+                team_ids = TeamMember.objects.filter(user=request.user).values_list("team_id", flat=True)
+                is_team_member = TournamentRegistration.objects.filter(
+                    tournament=tournament, team_id__in=team_ids
+                ).exists()
+
+                if not (is_captain or is_team_member):
                     return Response({"error": "You are not registered for this tournament"}, status=403)
             except (PlayerProfile.DoesNotExist, Tournament.DoesNotExist):
                 return Response({"error": "Tournament not found or you don't have access"}, status=404)
@@ -220,8 +230,11 @@ class RoundGroupsListView(generics.GenericAPIView):
                             "scores_submitted": match.scores.exists(),
                             "scores": [
                                 {
-                                    "team_id": score.team.team.id,  # Actual Team ID
+                                    "team_id": score.team.team.id if score.team and score.team.team else None,
                                     "team_name": score.team.team_name,
+                                    "profile_picture": score.team.team.profile_picture.url
+                                    if score.team and score.team.team and score.team.team.profile_picture
+                                    else None,
                                     "position_points": score.position_points,
                                     "kill_points": score.kill_points,
                                     "wins": score.wins,

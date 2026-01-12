@@ -1,0 +1,61 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.13.7, pytest-7.4.3, pluggy-1.6.0 -- /Users/Sukruth30/Projects/Scrimverse/backend/.venv/bin/python3.13
+cachedir: .pytest_cache
+django: version: 5.0, settings: scrimverse.settings (from ini)
+rootdir: /Users/Sukruth30/Projects/Scrimverse/backend
+configfile: pytest.ini
+plugins: Faker-22.0.0, cov-4.1.0, django-4.7.0
+collecting ... collected 1 item
+
+tests/tournaments/test_tournament_filters.py::test_filter_tournaments_by_game_name Creating test database for alias 'default'...
+COUNT BEFORE: 3
+DEBUG CONTENT TYPE: <class 'collections.OrderedDict'>
+DEBUG DATA: OrderedDict({'count': 2, 'next': None, 'previous': None, 'results': [OrderedDict({'id': 3, 'title': 'Multi-tiered dynamic groupware Tournament', 'game_name': 'BGMI Scrims', 'game_mode': 'Squad', 'host_name': 'user2', 'host': {'id': 3, 'username': 'user2'}, 'max_participants': 100, 'current_participants': 0, 'entry_fee': '697.50', 'prize_pool': '51806.72', 'tournament_start': '2026-01-17T15:48:18.499039+05:30', 'status': 'upcoming', 'banner_image': None, 'is_featured': False, 'plan_type': 'basic', 'homepage_banner': False, 'event_mode': 'TOURNAMENT'}), OrderedDict({'id': 1, 'title': 'Synergized systematic analyzer Tournament', 'game_name': 'BGMI - Pro League', 'game_mode': 'Squad', 'host_name': 'user0', 'host': {'id': 1, 'username': 'user0'}, 'max_participants': 50, 'current_participants': 0, 'entry_fee': '117.67', 'prize_pool': '89147.15', 'tournament_start': '2026-01-17T15:48:18.329323+05:30', 'status': 'upcoming', 'banner_image': None, 'is_featured': False, 'plan_type': 'basic', 'homepage_banner': False, 'event_mode': 'TOURNAMENT'})]})
+FAILEDDestroying test database for alias 'default'...
+
+
+=================================== FAILURES ===================================
+_____________________ test_filter_tournaments_by_game_name _____________________
+tests/tournaments/test_tournament_filters.py:31: in test_filter_tournaments_by_game_name
+    assert len(response.data) == 2
+E   assert 4 == 2
+E    +  where 4 = len(OrderedDict({'count': 2, 'next': None, 'previous': None, 'results': [OrderedDict({'id': 3, 'title': 'Multi-tiered dynamic groupware Tournament', 'game_name': 'BGMI Scrims', 'game_mode': 'Squad', 'host_name': 'user2', 'host': {'id': 3, 'username': 'user2'}, 'max_participants': 100, 'current_participants': 0, 'entry_fee': '697.50', 'prize_pool': '51806.72', 'tournament_start': '2026-01-17T15:48:18.499039+05:30', 'status': 'upcoming', 'banner_image': None, 'is_featured': False, 'plan_type': 'basic', 'homepage_banner': False, 'event_mode': 'TOURNAMENT'}), OrderedDict({'id': 1, 'title': 'Synergized systematic analyzer Tournament', 'game_name': 'BGMI - Pro League', 'game_mode': 'Squad', 'host_name': 'user0', 'host': {'id': 1, 'username': 'user0'}, 'max_participants': 50, 'current_participants': 0, 'entry_fee': '117.67', 'prize_pool': '89147.15', 'tournament_start': '2026-01-17T15:48:18.329323+05:30', 'status': 'upcoming', 'banner_image': None, 'is_featured': False, 'plan_type': 'basic', 'homepage_banner': False, 'event_mode': 'TOURNAMENT'})]}))
+E    +    where OrderedDict({'count': 2, 'next': None, 'previous': None, 'results': [OrderedDict({'id': 3, 'title': 'Multi-tiered dynamic groupware Tournament', 'game_name': 'BGMI Scrims', 'game_mode': 'Squad', 'host_name': 'user2', 'host': {'id': 3, 'username': 'user2'}, 'max_participants': 100, 'current_participants': 0, 'entry_fee': '697.50', 'prize_pool': '51806.72', 'tournament_start': '2026-01-17T15:48:18.499039+05:30', 'status': 'upcoming', 'banner_image': None, 'is_featured': False, 'plan_type': 'basic', 'homepage_banner': False, 'event_mode': 'TOURNAMENT'}), OrderedDict({'id': 1, 'title': 'Synergized systematic analyzer Tournament', 'game_name': 'BGMI - Pro League', 'game_mode': 'Squad', 'host_name': 'user0', 'host': {'id': 1, 'username': 'user0'}, 'max_participants': 50, 'current_participants': 0, 'entry_fee': '117.67', 'prize_pool': '89147.15', 'tournament_start': '2026-01-17T15:48:18.329323+05:30', 'status': 'upcoming', 'banner_image': None, 'is_featured': False, 'plan_type': 'basic', 'homepage_banner': False, 'event_mode': 'TOURNAMENT'})]}) = <Response status_code=200, "application/json">.data
+
+---------- coverage: platform darwin, python 3.13.7-final-0 ----------
+Name                            Stmts   Miss  Cover   Missing
+-------------------------------------------------------------
+accounts/__init__.py                0      0   100%
+accounts/admin.py                  30      2    93%   40, 45
+accounts/apps.py                    4      0   100%
+accounts/google_auth.py            14      8    43%   26-49
+accounts/leaderboard_views.py      48     35    27%   25-86, 98-103
+accounts/models.py                111     12    89%   29, 49, 70, 95-97, 100, 135-136, 139, 159, 190
+accounts/serializers.py           211    113    46%   41-58, 65-76, 80-88, 91-99, 102-109, 112-119, 122-129, 146-147, 150-151, 156-157, 162-167, 170-184, 187-203, 216-218, 222-236, 249-251, 254-258, 262-276, 301, 304-308
+accounts/tasks.py                  46     46     0%   4-120
+accounts/urls.py                    8      0   100%
+accounts/views.py                 464    376    19%   36-43, 66-73, 95-117, 145-260, 283-294, 307-309, 321-332, 344-353, 356-397, 409-422, 435-462, 475-503, 511, 526-530, 534-554, 559-574, 578-596, 600-609, 613-614, 618-638, 642-658, 662-685, 690-713, 718-762, 767-769, 774-814, 819-825, 830-853, 858-872, 877-896, 901-980
+scrimverse/__init__.py              2      0   100%
+scrimverse/celery.py               12      1    92%   44
+scrimverse/middleware.py           10      0   100%
+scrimverse/settings.py             48      0   100%
+scrimverse/urls.py                  7      1    86%   17
+test_celery_tasks.py               34     34     0%   5-73
+tournaments/__init__.py             0      0   100%
+tournaments/admin.py               53      0   100%
+tournaments/apps.py                 6      0   100%
+tournaments/groups_views.py       240    213    11%   21, 38-145, 174-241, 258-312, 336-351, 379-433, 452-575
+tournaments/models.py             235     44    81%   149, 153, 172-187, 191, 197-202, 212-221, 271, 310, 335-336, 342-350, 378, 382, 386-402, 431, 454-455, 458, 491, 515
+tournaments/serializers.py        271    166    39%   36-38, 42-53, 57-86, 90-101, 191-208, 216-221, 225-252, 256-358, 379-440, 458-460, 472-481, 520, 523, 526-527, 530-531, 534-535
+tournaments/services.py            90     70    22%   23-52, 76-121, 135-140, 154-178, 192-194, 206-216, 230-245
+tournaments/signals.py             13      2    85%   20, 26
+tournaments/tasks.py              311    311     0%   4-719
+tournaments/urls.py                 4      0   100%
+tournaments/views.py              600    429    28%   32, 39, 73-82, 96, 100, 102, 106, 108, 125-147, 164-187, 190-200, 216-217, 220-222, 236-237, 240-242, 255-256, 273-282, 306-307, 321-322, 335-336, 359-361, 364-442, 455-471, 484-491, 504-519, 532-533, 549-557, 570-571, 588-589, 592-599, 617-620, 632-667, 690-725, 743-806, 824-909, 930-988, 1010-1042, 1065-1066, 1069-1090, 1102-1125, 1145-1165, 1183-1216, 1244-1274, 1294-1350
+-------------------------------------------------------------
+TOTAL                            2872   1863    35%
+Coverage HTML written to dir htmlcov
+
+=========================== short test summary info ============================
+FAILED tests/tournaments/test_tournament_filters.py::test_filter_tournaments_by_game_name
+======================== 1 failed, 3 warnings in 1.68s =========================

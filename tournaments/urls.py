@@ -1,7 +1,7 @@
 from django.urls import path
 
 # Groups and Matches Views
-from .groups_views import (
+from tournaments.groups_views import (
     ConfigureRoundView,
     EndMatchView,
     RoundGroupsListView,
@@ -9,7 +9,7 @@ from .groups_views import (
     StartMatchView,
     SubmitMatchScoresView,
 )
-from .views import (  # Tournament URLs; Scrim URLs; Registration URLs; Rating URLs
+from tournaments.views import (  # Tournament URLs; Scrim URLs; Registration URLs; Rating URLs
     EndRoundView,
     EndTournamentView,
     HostDashboardStatsView,
@@ -18,6 +18,7 @@ from .views import (  # Tournament URLs; Scrim URLs; Registration URLs; Rating U
     HostTournamentsView,
     ManageTournamentView,
     PlatformStatsView,
+    PlayerPublicRegistrationsView,
     PlayerScrimRegistrationsView,
     PlayerTournamentRegistrationsView,
     ScrimCreateView,
@@ -57,6 +58,11 @@ urlpatterns = [
     # Tournament Registration
     path("<int:tournament_id>/register/", TournamentRegistrationCreateView.as_view(), name="tournament-register"),
     path("my-registrations/", PlayerTournamentRegistrationsView.as_view(), name="my-tournament-registrations"),
+    path(
+        "player/<int:player_id>/registrations/",
+        PlayerPublicRegistrationsView.as_view(),
+        name="player-public-registrations",
+    ),
     # Tournament Management
     path("<int:pk>/manage/", ManageTournamentView.as_view(), name="tournament-manage"),
     path("<int:pk>/update-fields/", UpdateTournamentFieldsView.as_view(), name="tournament-update-fields"),

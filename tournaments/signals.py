@@ -5,7 +5,7 @@ from django.core.cache import cache
 from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 
-from .models import Tournament, TournamentRegistration
+from tournaments.models import Tournament, TournamentRegistration
 
 
 @receiver(post_save, sender=Tournament)

@@ -1,3 +1,4 @@
+import json
 import random
 import string
 import uuid
@@ -63,8 +64,6 @@ def create_tournament(token, game_mode, max_teams, title_suffix="", plan_type="b
         with open(BANNER_IMAGE_PATH, "rb") as img:
             files = {"banner_image": ("download.jpeg", img, "image/jpeg")}
             # Convert rounds to JSON string for multipart form
-            import json
-
             form_data = data.copy()
             form_data["rounds"] = json.dumps(data["rounds"])
 

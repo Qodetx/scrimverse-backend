@@ -396,7 +396,7 @@ def test_update_tournament_fields_restricted(host_authenticated_client, tourname
         "rules": "Updated rules",
         # Try to update restricted fields
         "max_participants": 200,  # Should be ignored
-        "game_name": "Valorant",  # Should be ignored
+        "game_name": "COD",  # Should be ignored
     }
 
     response = host_authenticated_client.patch(f"/api/tournaments/{tournament.id}/update-fields/", data, format="json")

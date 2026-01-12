@@ -1,5 +1,8 @@
+from datetime import timedelta
+
 from django.contrib.auth import authenticate
 from django.db import models
+from django.utils import timezone
 
 from rest_framework import generics, permissions, status, viewsets
 from rest_framework.decorators import action
@@ -8,9 +11,9 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .google_auth import GoogleOAuth
-from .models import HostProfile, PlayerProfile, Team, TeamJoinRequest, TeamMember, User
-from .serializers import (
+from accounts.google_auth import GoogleOAuth
+from accounts.models import HostProfile, PlayerProfile, Team, TeamJoinRequest, TeamMember, User
+from accounts.serializers import (
     HostProfileSerializer,
     HostRegistrationSerializer,
     LoginSerializer,
@@ -21,6 +24,8 @@ from .serializers import (
     TeamSerializer,
     UserSerializer,
 )
+from accounts.tasks import process_team_invitation
+from tournaments.models import RoundScore, TournamentRegistration
 
 
 class PlayerRegistrationView(generics.CreateAPIView):
@@ -363,10 +368,6 @@ class CurrentUserView(APIView):
         # Username change restriction logic
         new_username = data.get("username")
         if new_username and new_username != user.username:
-            from datetime import timedelta
-
-            from django.utils import timezone
-
             # If they have already changed it once
             if user.username_change_count > 0:
                 # Check if 6 months (approx 180 days) have passed
@@ -503,6 +504,15 @@ class HostSearchView(APIView):
         return Response({"results": results}, status=status.HTTP_200_OK)
 
 
+class IsPlayerUser(permissions.BasePermission):
+    """
+    Permission class to allow access only to player users
+    """
+
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.user_type == "player"
+
+
 class TeamViewSet(viewsets.ModelViewSet):
     """
     Team Management API
@@ -517,6 +527,8 @@ class TeamViewSet(viewsets.ModelViewSet):
         """
         if self.action in ["list", "retrieve"]:
             return [permissions.AllowAny()]
+        if self.action == "create":
+            return [permissions.IsAuthenticated(), IsPlayerUser()]
         return [permissions.IsAuthenticated()]
 
     def get_queryset(self):
@@ -529,12 +541,49 @@ class TeamViewSet(viewsets.ModelViewSet):
                 ).distinct()
             return Team.objects.all()
 
-        # For retrieve, return all teams (public view)
-        if self.action == "retrieve":
+        # For actions that handle their own permission checks or should return 403 instead of 404
+        # we return all teams and let the action/update/delete method handle the check.
+        if self.action in [
+            "retrieve",
+            "update",
+            "partial_update",
+            "destroy",
+            "leave_team",
+            "request_join",
+            "past_tournaments",
+            "transfer_captaincy",
+            "invite_player",
+            "remove_member",
+            "add_member",
+            "accept_request",
+            "reject_request",
+            "appoint_captain",
+            "join_requests",
+        ]:
             return Team.objects.all()
 
-        # For other actions (update, delete, etc.), only teams where user is captain
-        return Team.objects.filter(captain=self.request.user)
+        # Fallback
+        return Team.objects.all()
+
+    @action(detail=True, methods=["post"])
+    def leave_team(self, request, pk=None):
+        """Allow a player to leave a team"""
+        team = self.get_object()
+
+        # Check if user is a member
+        member = TeamMember.objects.filter(team=team, user=request.user).first()
+        if not member:
+            return Response({"error": "You are not a member of this team"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check if captain
+        if team.captain == request.user:
+            return Response(
+                {"error": "Captains cannot leave the team. Transfer captaincy or delete the team instead."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        member.delete()
+        return Response({"message": "Successfully left the team"}, status=status.HTTP_200_OK)
 
     def perform_create(self, serializer):
         # Check if user is already in a PERMANENT team (temporary teams are allowed)
@@ -557,6 +606,24 @@ class TeamViewSet(viewsets.ModelViewSet):
             if username and username != self.request.user.username:
                 user_obj = User.objects.filter(username=username, user_type="player").first()
                 TeamMember.objects.create(team=team, username=username, user=user_obj, is_captain=False)
+
+    def update(self, request, *args, **kwargs):
+        """Update team details (captain only)"""
+        team = self.get_object()
+        if team.captain != request.user:
+            return Response({"error": "Only the captain can edit team details"}, status=status.HTTP_403_FORBIDDEN)
+
+        partial = kwargs.pop("partial", False)
+        serializer = self.get_serializer(team, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+
+        return Response(serializer.data)
+
+    def partial_update(self, request, *args, **kwargs):
+        """Partial update team details (captain only)"""
+        kwargs["partial"] = True
+        return self.update(request, *args, **kwargs)
 
     @action(detail=True, methods=["post"])
     def add_member(self, request, pk=None):
@@ -634,8 +701,8 @@ class TeamViewSet(viewsets.ModelViewSet):
         """Player requests to join a team"""
         team = self.get_object()
 
-        # Check if user is already in a team
-        if TeamMember.objects.filter(user=request.user).exists():
+        # Check if user is already in a PERMANENT team
+        if TeamMember.objects.filter(user=request.user, team__is_temporary=False).exists():
             return Response({"error": "You are already a member of a team"}, status=status.HTTP_400_BAD_REQUEST)
 
         # Check if team is full
@@ -643,16 +710,114 @@ class TeamViewSet(viewsets.ModelViewSet):
             return Response({"error": "Team is full"}, status=status.HTTP_400_BAD_REQUEST)
 
         # Create or update join request
-
         join_request, created = TeamJoinRequest.objects.get_or_create(
-            team=team, player=request.user, defaults={"status": "pending"}
+            team=team, player=request.user, defaults={"status": "pending", "request_type": "request"}
         )
 
-        if not created and join_request.status == "rejected":
-            join_request.status = "pending"
-            join_request.save()
+        if not created:
+            if join_request.status == "rejected":
+                join_request.status = "pending"
+                join_request.request_type = "request"
+                join_request.save()
+            elif join_request.request_type == "invite" and join_request.status == "pending":
+                return Response(
+                    {"message": "You already have a pending invite from this team"}, status=status.HTTP_400_BAD_REQUEST
+                )
 
         return Response({"message": "Join request sent"}, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"])
+    def invite_player(self, request, pk=None):
+        """Captain invites a player to the team"""
+        team = self.get_object()
+        if team.captain != request.user:
+            return Response({"error": "Only captains can invite players"}, status=status.HTTP_403_FORBIDDEN)
+
+        player_id = request.data.get("player_id")
+        if not player_id:
+            return Response({"error": "player_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            player = User.objects.get(id=player_id, user_type="player")
+        except User.DoesNotExist:
+            return Response({"error": "Player not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # Check if player is already in a PERMANENT team
+        if TeamMember.objects.filter(user=player, team__is_temporary=False).exists():
+            return Response({"error": "Player is already a member of a team"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Check if team is full
+        if team.members.count() >= 15:
+            return Response({"error": "Team is full"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Create or update invite
+        invite, created = TeamJoinRequest.objects.get_or_create(
+            team=team, player=player, defaults={"status": "pending", "request_type": "invite"}
+        )
+
+        if not created:
+            if invite.status == "rejected":
+                invite.status = "pending"
+                invite.request_type = "invite"
+                invite.save()
+            elif invite.request_type == "request" and invite.status == "pending":
+                # Automatically accept if player already requested to join
+                TeamMember.objects.create(team=team, user=player, username=player.username, is_captain=False)
+                invite.status = "accepted"
+                invite.save()
+                return Response(
+                    {"message": "Player already had a join request. They have been added to the team."},
+                    status=status.HTTP_200_OK,
+                )
+
+        # Process invitation async (email notifications disabled for now)
+        process_team_invitation.delay(team.id, player.id, "invite")
+
+        return Response({"message": "Invitation sent"}, status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=["get"])
+    def my_invites(self, request):
+        """Get pending invitations for the current user"""
+        invites = TeamJoinRequest.objects.filter(player=request.user, status="pending", request_type="invite")
+        serializer = TeamJoinRequestSerializer(invites, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=["post"])
+    def handle_invite(self, request):
+        """Accept or reject an invitation"""
+        invite_id = request.data.get("invite_id")
+        action = request.data.get("action")  # 'accept' or 'reject'
+
+        if not invite_id or action not in ["accept", "reject"]:
+            return Response({"error": "invite_id and valid action are required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        invite = TeamJoinRequest.objects.filter(
+            id=invite_id, player=request.user, status="pending", request_type="invite"
+        ).first()
+        if not invite:
+            return Response({"error": "Invitation not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if action == "accept":
+            team = invite.team
+            # Check if player is already in a team
+            if TeamMember.objects.filter(user=request.user, team__is_temporary=False).exists():
+                return Response({"error": "You are already a member of a team"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Check if team is full
+            if team.members.count() >= 15:
+                return Response({"error": "Team is full"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Add member
+            TeamMember.objects.create(team=team, user=request.user, username=request.user.username, is_captain=False)
+            invite.status = "accepted"
+            invite.save()
+
+            return Response({"message": "Invitation accepted"}, status=status.HTTP_200_OK)
+        else:
+            invite.status = "rejected"
+            invite.save()
+
+            return Response({"message": "Invitation rejected"}, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"])
     def join_requests(self, request, pk=None):
@@ -661,7 +826,7 @@ class TeamViewSet(viewsets.ModelViewSet):
         if team.captain != request.user:
             return Response({"error": "Only captains can view join requests"}, status=status.HTTP_403_FORBIDDEN)
 
-        requests = team.join_requests.filter(status="pending")
+        requests = team.join_requests.filter(status="pending", request_type="request")
         serializer = TeamJoinRequestSerializer(requests, many=True)
         return Response(serializer.data)
 
@@ -735,3 +900,90 @@ class TeamViewSet(viewsets.ModelViewSet):
         member.save()
 
         return Response({"message": "Captain appointed"}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"])
+    def past_tournaments(self, request, pk=None):
+        """Get past tournaments for a team"""
+        team = self.get_object()
+
+        # Get all completed tournaments this team participated in
+        registrations = (
+            TournamentRegistration.objects.filter(team=team, tournament__status="completed", status="confirmed")
+            .select_related("tournament")
+            .order_by("-tournament__tournament_end")
+        )
+
+        tournaments_data = []
+        for reg in registrations:
+            tournament = reg.tournament
+
+            # Determine placement
+            placement = "Participated"
+
+            # Check if this team won (check winners JSON field)
+            if tournament.winners:
+                # Winners is a dict like {'1': reg_id, '2': reg_id} for each round
+                # The final round winner is the tournament winner
+                final_round = str(tournament.get_total_rounds())
+                if final_round in tournament.winners and tournament.winners[final_round] == reg.id:
+                    placement = "1st Place - Winner"
+
+            # Try to get placement from round scores if available
+            if placement == "Participated":
+                try:
+                    # Get total points across all rounds
+                    total_score = (
+                        RoundScore.objects.filter(tournament=tournament, team=reg).aggregate(
+                            total=models.Sum("total_points")
+                        )["total"]
+                        or 0
+                    )
+
+                    if total_score > 0:
+                        # Get all teams' total scores for this tournament
+                        all_scores = (
+                            RoundScore.objects.filter(tournament=tournament)
+                            .values("team")
+                            .annotate(total=models.Sum("total_points"))
+                            .order_by("-total")
+                        )
+
+                        # Find this team's position
+                        position = 1
+                        for score in all_scores:
+                            if score["team"] == reg.id:
+                                if position == 1:
+                                    placement = "1st Place"
+                                elif position == 2:
+                                    placement = "2nd Place"
+                                elif position == 3:
+                                    placement = "3rd Place"
+                                else:
+                                    placement = f"{position}th Place"
+                                break
+                            position += 1
+                except Exception as e:
+                    print(f"Error calculating placement: {e}")
+                    placement = "Participated"
+
+            # Format date
+            date_str = (
+                tournament.tournament_end.strftime("%m/%d/%Y")
+                if tournament.tournament_end
+                else tournament.tournament_start.strftime("%m/%d/%Y")
+                if tournament.tournament_start
+                else "N/A"
+            )
+
+            tournaments_data.append(
+                {
+                    "id": tournament.id,
+                    "name": tournament.title,
+                    "date": date_str,
+                    "placement": placement,
+                    "status": "completed",
+                    "tournament_type": tournament.event_mode.lower() if tournament.event_mode else "tournament",
+                }
+            )
+
+        return Response(tournaments_data, status=status.HTTP_200_OK)

@@ -7,7 +7,7 @@ from typing import List, Tuple
 
 from django.db.models import Sum
 
-from .models import Group, Match, MatchScore, RoundScore, Tournament, TournamentRegistration
+from tournaments.models import Group, Match, MatchScore, RoundScore, Tournament, TournamentRegistration
 
 
 class TournamentGroupService:
@@ -19,19 +19,6 @@ class TournamentGroupService:
     def calculate_groups(total_teams: int, teams_per_group: int) -> Tuple[int, List[int]]:
         """
         Calculate number of groups and distribution of teams
-
-        Args:
-            total_teams: Total number of teams to distribute
-            teams_per_group: Desired teams per group
-
-        Returns:
-            Tuple of (num_groups, teams_distribution)
-            teams_distribution: List of team counts for each group
-
-        Example:
-            100 teams, 24 per group:
-            - 100 ÷ 24 = 4 groups + 4 remainder
-            - Distribution: [25, 25, 25, 25] (add +1 to first 4 groups)
         """
         if teams_per_group > TournamentGroupService.MAX_TEAMS_PER_GROUP:
             raise ValueError(f"Teams per group cannot exceed {TournamentGroupService.MAX_TEAMS_PER_GROUP}")
@@ -39,27 +26,28 @@ class TournamentGroupService:
         if teams_per_group <= 0:
             raise ValueError("Teams per group must be greater than 0")
 
-        num_groups = total_teams // teams_per_group
-        remainder = total_teams % teams_per_group
+        # Determine number of groups by rounding total / target
+        num_groups = round(total_teams / teams_per_group)
+        if num_groups == 0:
+            num_groups = 1
 
-        # If there's a remainder, we need one more group
-        if remainder > 0:
-            num_groups += 1
+        # Calculate base number of teams per group and remainder
+        base_per_group = total_teams // num_groups
+        remainder = total_teams % num_groups
 
-        # Distribute teams evenly, adding +1 to groups until remainder is exhausted
+        # Distribute teams as evenly as possible
         teams_distribution = []
         for i in range(num_groups):
-            base_teams = teams_per_group
+            count = base_per_group
             if i < remainder:
-                base_teams += 1
-            teams_distribution.append(base_teams)
+                count += 1
+            teams_distribution.append(count)
 
-        # Validate that no group exceeds max limit
+        # Safety check for max limit (in case rounding leads to overflow)
         if max(teams_distribution) > TournamentGroupService.MAX_TEAMS_PER_GROUP:
-            raise ValueError(
-                f"Configuration would result in groups with {max(teams_distribution)} teams, "
-                f"exceeding max limit of {TournamentGroupService.MAX_TEAMS_PER_GROUP}"
-            )
+            # If overflow, we MUST add at least one more group
+            new_num_groups = num_groups + 1
+            return TournamentGroupService.calculate_groups(total_teams, total_teams // new_num_groups + 1)
 
         return num_groups, teams_distribution
 
