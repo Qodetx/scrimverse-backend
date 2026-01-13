@@ -13,7 +13,7 @@ from celery import shared_task
 from PIL import Image
 
 from accounts.models import HostProfile, PlayerProfile, Team, TeamStatistics
-from tournaments.models import Match, MatchScore, RoundScore, ScrimRegistration, Tournament, TournamentRegistration
+from tournaments.models import Match, MatchScore, RoundScore, Tournament, TournamentRegistration
 from tournaments.services import TournamentGroupService
 
 
@@ -280,14 +280,7 @@ def update_host_dashboard_stats(host_id):
             or 0
         )
 
-        revenue_scrims = (
-            ScrimRegistration.objects.filter(scrim__host=host_profile, status="confirmed").aggregate(
-                total=Sum("scrim__entry_fee")
-            )["total"]
-            or 0
-        )
-
-        total_revenue = revenue_tournaments + revenue_scrims
+        total_revenue = revenue_tournaments
 
         # Monthly growth
         rev_tournaments_month = (
@@ -297,14 +290,7 @@ def update_host_dashboard_stats(host_id):
             or 0
         )
 
-        rev_scrims_month = (
-            ScrimRegistration.objects.filter(
-                scrim__host=host_profile, status="confirmed", registered_at__gte=one_month_ago
-            ).aggregate(total=Sum("scrim__entry_fee"))["total"]
-            or 0
-        )
-
-        growth_this_month = rev_tournaments_month + rev_scrims_month
+        growth_this_month = rev_tournaments_month
 
         # Average participation
         avg_participation = (total_participants / total_tournaments) if total_tournaments > 0 else 0

@@ -183,61 +183,6 @@ def test_register_squad_tournament_with_five_players_fails(authenticated_client,
 
 
 # ============================================================================
-# SCRIM MODE REGISTRATION TESTS
-# ============================================================================
-
-
-@pytest.mark.django_db
-def test_register_solo_scrim(authenticated_client, player_user, host_user):
-    """Test player can register for solo scrim"""
-    from tests.factories import ScrimFactory
-
-    scrim = ScrimFactory(host=host_user.host_profile, game_mode="Solo", status="upcoming")
-
-    data = {"team_name": "Solo Scrim", "player_usernames": [player_user.username]}
-
-    response = authenticated_client.post(f"/api/tournaments/scrims/{scrim.id}/register/", data, format="json")
-
-    assert response.status_code == status.HTTP_201_CREATED
-
-
-@pytest.mark.django_db
-def test_register_duo_scrim(authenticated_client, player_user, test_players, host_user):
-    """Test player can register for duo scrim"""
-    from tests.factories import ScrimFactory
-
-    scrim = ScrimFactory(host=host_user.host_profile, game_mode="Duo", status="upcoming")
-
-    data = {"team_name": "Duo Scrim", "player_usernames": [player_user.username, test_players[0].username]}
-
-    response = authenticated_client.post(f"/api/tournaments/scrims/{scrim.id}/register/", data, format="json")
-
-    assert response.status_code == status.HTTP_201_CREATED
-
-
-@pytest.mark.django_db
-def test_register_squad_scrim(authenticated_client, player_user, test_players, host_user):
-    """Test player can register for squad scrim"""
-    from tests.factories import ScrimFactory
-
-    scrim = ScrimFactory(host=host_user.host_profile, game_mode="Squad", status="upcoming")
-
-    data = {
-        "team_name": "Squad Scrim",
-        "player_usernames": [
-            player_user.username,
-            test_players[0].username,
-            test_players[1].username,
-            test_players[2].username,
-        ],
-    }
-
-    response = authenticated_client.post(f"/api/tournaments/scrims/{scrim.id}/register/", data, format="json")
-
-    assert response.status_code == status.HTTP_201_CREATED
-
-
-# ============================================================================
 # EDGE CASES AND VALIDATION TESTS
 # ============================================================================
 

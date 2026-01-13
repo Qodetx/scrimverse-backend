@@ -11,12 +11,9 @@ from rest_framework.views import APIView
 
 from accounts.models import HostProfile, PlayerProfile, TeamMember, User
 from accounts.tasks import update_host_rating_cache
-from tournaments.models import HostRating, RoundScore, Scrim, ScrimRegistration, Tournament, TournamentRegistration
+from tournaments.models import HostRating, RoundScore, Tournament, TournamentRegistration
 from tournaments.serializers import (
     HostRatingSerializer,
-    ScrimListSerializer,
-    ScrimRegistrationSerializer,
-    ScrimSerializer,
     TournamentListSerializer,
     TournamentRegistrationSerializer,
     TournamentSerializer,
@@ -256,86 +253,6 @@ class HostTournamentsView(generics.ListAPIView):
         return Tournament.objects.filter(host_id=host_id)
 
 
-# ============= Scrim Views =============
-
-
-class ScrimListView(generics.ListAPIView):
-    """
-    List all scrims
-    GET /api/tournaments/scrims/
-    """
-
-    queryset = Scrim.objects.all()
-    serializer_class = ScrimListSerializer
-    permission_classes = [permissions.AllowAny]
-
-    def get_queryset(self):
-        queryset = Scrim.objects.all()
-        status_param = self.request.query_params.get("status", None)
-        game = self.request.query_params.get("game", None)
-
-        if status_param:
-            queryset = queryset.filter(status=status_param)
-        if game:
-            queryset = queryset.filter(game_name__icontains=game)
-
-        return queryset
-
-
-class ScrimDetailView(generics.RetrieveAPIView):
-    """
-    Get scrim details
-    GET /api/tournaments/scrims/<id>/
-    """
-
-    queryset = Scrim.objects.all()
-    serializer_class = ScrimSerializer
-    permission_classes = [permissions.AllowAny]
-
-
-class ScrimCreateView(generics.CreateAPIView):
-    """
-    Host creates a scrim
-    POST /api/tournaments/scrims/create/
-    """
-
-    serializer_class = ScrimSerializer
-    permission_classes = [IsHostUser]
-
-    def perform_create(self, serializer):
-        host_profile = HostProfile.objects.get(user=self.request.user)
-        serializer.save(host=host_profile)
-
-
-class ScrimUpdateView(generics.UpdateAPIView):
-    """
-    Host updates their scrim
-    PUT/PATCH /api/tournaments/scrims/<id>/update/
-    """
-
-    queryset = Scrim.objects.all()
-    serializer_class = ScrimSerializer
-    permission_classes = [IsHostUser]
-
-    def get_queryset(self):
-        host_profile = HostProfile.objects.get(user=self.request.user)
-        return Scrim.objects.filter(host=host_profile)
-
-
-class ScrimDeleteView(generics.DestroyAPIView):
-    """
-    Host deletes their scrim
-    DELETE /api/tournaments/scrims/<id>/delete/
-    """
-
-    queryset = Scrim.objects.all()
-    permission_classes = [IsHostUser]
-
-    def get_queryset(self):
-        host_profile = HostProfile.objects.get(user=self.request.user)
-        return Scrim.objects.filter(host=host_profile)
-
-
 # ============= Registration Views =============
 
 
@@ -440,35 +357,6 @@ class TournamentRegistrationCreateView(generics.CreateAPIView):
         update_host_dashboard_stats.delay(tournament.host.id)
 
 
-class ScrimRegistrationCreateView(generics.CreateAPIView):
-    """
-    Player registers for a scrim
-    POST /api/tournaments/scrims/<scrim_id>/register/
-    """
-
-    serializer_class = ScrimRegistrationSerializer
-    permission_classes = [IsPlayerUser]
-
-    def perform_create(self, serializer):
-        player_profile = PlayerProfile.objects.get(user=self.request.user)
-        scrim_id = self.kwargs["scrim_id"]
-        scrim = Scrim.objects.get(id=scrim_id)
-
-        # Check if full
-        if scrim.current_participants >= scrim.max_participants:
-            raise ValidationError({"error": "Scrim is full"})
-
-        # Check if already registered
-        if ScrimRegistration.objects.filter(scrim=scrim, player=player_profile).exists():
-            raise ValidationError({"error": "Already registered for this scrim"})
-
-        serializer.save(player=player_profile, scrim=scrim)
-
-        # Update participant count
-        scrim.current_participants += 1
-        scrim.save()
-
-
 class PlayerTournamentRegistrationsView(generics.ListAPIView):
     """
     Get all tournament registrations of a player
@@ -517,20 +405,6 @@ class PlayerPublicRegistrationsView(generics.ListAPIView):
         if self.request.query_params.get("confirmed") == "true":
             queryset = queryset.filter(status="confirmed")
         return queryset.order_by("-registered_at")
-
-
-class PlayerScrimRegistrationsView(generics.ListAPIView):
-    """
-    Get all scrim registrations of a player
-    GET /api/tournaments/scrims/my-registrations/
-    """
-
-    serializer_class = ScrimRegistrationSerializer
-    permission_classes = [IsPlayerUser]
-
-    def get_queryset(self):
-        player_profile = PlayerProfile.objects.get(user=self.request.user)
-        return ScrimRegistration.objects.filter(player=player_profile)
 
 
 # ============= Host Rating Views =============

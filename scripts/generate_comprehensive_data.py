@@ -174,7 +174,6 @@ def create_teams_and_players(num_teams=60):
         PlayerProfile.objects.create(
             user=captain,
             preferred_games=[random.choice(GAMES)],
-            skill_level=random.choice(["Beginner", "Intermediate", "Advanced", "Pro"]),
             bio=f"Captain of {team_name}",
         )
 
@@ -206,7 +205,6 @@ def create_teams_and_players(num_teams=60):
             PlayerProfile.objects.create(
                 user=player,
                 preferred_games=[random.choice(GAMES)],
-                skill_level=random.choice(["Beginner", "Intermediate", "Advanced", "Pro"]),
             )
 
             all_players.append(player)

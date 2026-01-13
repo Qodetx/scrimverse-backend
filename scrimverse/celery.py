@@ -34,6 +34,10 @@ app.conf.beat_schedule = {
         "task": "tournaments.tasks.refresh_all_host_dashboards",
         "schedule": crontab(minute="*/10"),  # Run every 10 minutes
     },
+    "update-leaderboard": {
+        "task": "tournaments.tasks.update_leaderboard",
+        "schedule": crontab(minute="*/30"),  # Run every 30 minutes
+    },
 }
 
 app.conf.timezone = "Asia/Kolkata"

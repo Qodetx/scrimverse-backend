@@ -9,7 +9,7 @@ from tournaments.groups_views import (
     StartMatchView,
     SubmitMatchScoresView,
 )
-from tournaments.views import (  # Tournament URLs; Scrim URLs; Registration URLs; Rating URLs
+from tournaments.views import (  # Tournament URLs; Registration URLs; Rating URLs
     EndRoundView,
     EndTournamentView,
     HostDashboardStatsView,
@@ -19,14 +19,7 @@ from tournaments.views import (  # Tournament URLs; Scrim URLs; Registration URL
     ManageTournamentView,
     PlatformStatsView,
     PlayerPublicRegistrationsView,
-    PlayerScrimRegistrationsView,
     PlayerTournamentRegistrationsView,
-    ScrimCreateView,
-    ScrimDeleteView,
-    ScrimDetailView,
-    ScrimListView,
-    ScrimRegistrationCreateView,
-    ScrimUpdateView,
     SelectTeamsView,
     SelectWinnerView,
     StartRoundView,
@@ -96,15 +89,6 @@ urlpatterns = [
         SubmitMatchScoresView.as_view(),
         name="submit-match-scores",
     ),
-    # Scrim endpoints
-    path("scrims/", ScrimListView.as_view(), name="scrim-list"),
-    path("scrims/<int:pk>/", ScrimDetailView.as_view(), name="scrim-detail"),
-    path("scrims/create/", ScrimCreateView.as_view(), name="scrim-create"),
-    path("scrims/<int:pk>/update/", ScrimUpdateView.as_view(), name="scrim-update"),
-    path("scrims/<int:pk>/delete/", ScrimDeleteView.as_view(), name="scrim-delete"),
-    # Scrim Registration
-    path("scrims/<int:scrim_id>/register/", ScrimRegistrationCreateView.as_view(), name="scrim-register"),
-    path("scrims/my-registrations/", PlayerScrimRegistrationsView.as_view(), name="my-scrim-registrations"),
     # Host Rating
     path("host/<int:host_id>/rate/", HostRatingCreateView.as_view(), name="host-rate"),
     path("host/<int:host_id>/ratings/", HostRatingsListView.as_view(), name="host-ratings"),

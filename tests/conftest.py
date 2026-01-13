@@ -12,8 +12,6 @@ from rest_framework.test import APIClient
 from tests.factories import (
     HostProfileFactory,
     PlayerProfileFactory,
-    ScrimFactory,
-    ScrimRegistrationFactory,
     TournamentFactory,
     TournamentRegistrationFactory,
     UserFactory,
@@ -162,31 +160,9 @@ def multiple_tournaments(db, host_user):
 
 
 @pytest.fixture
-def scrim(db, host_user):
-    """Create a scrim"""
-    return ScrimFactory(host=host_user.host_profile)
-
-
-@pytest.fixture
-def multiple_scrims(db, host_user):
-    """Create multiple scrims"""
-    return [
-        ScrimFactory(host=host_user.host_profile, status="upcoming"),
-        ScrimFactory(host=host_user.host_profile, status="ongoing"),
-        ScrimFactory(host=host_user.host_profile, status="completed"),
-    ]
-
-
-@pytest.fixture
 def tournament_registration(db, tournament, player_user):
     """Create a tournament registration"""
     return TournamentRegistrationFactory(tournament=tournament, player=player_user.player_profile)
-
-
-@pytest.fixture
-def scrim_registration(db, scrim, player_user):
-    """Create a scrim registration"""
-    return ScrimRegistrationFactory(scrim=scrim, player=player_user.player_profile)
 
 
 @pytest.fixture

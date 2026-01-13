@@ -4,15 +4,7 @@ from rest_framework import serializers
 
 from accounts.models import PlayerProfile, Team, TeamMember, User
 from accounts.serializers import HostProfileSerializer, PlayerProfileSerializer
-from tournaments.models import (
-    HostRating,
-    Match,
-    MatchScore,
-    Scrim,
-    ScrimRegistration,
-    Tournament,
-    TournamentRegistration,
-)
+from tournaments.models import HostRating, Match, MatchScore, Tournament, TournamentRegistration
 
 
 class TournamentSerializer(serializers.ModelSerializer):
@@ -138,39 +130,6 @@ class TournamentListSerializer(serializers.ModelSerializer):
 
     def get_host(self, obj):
         return {"id": obj.host.id, "username": obj.host.user.username}
-
-
-class ScrimSerializer(serializers.ModelSerializer):
-    host = HostProfileSerializer(read_only=True)
-    host_id = serializers.IntegerField(write_only=True, required=False)
-
-    class Meta:
-        model = Scrim
-        fields = "__all__"
-        read_only_fields = ("current_participants", "created_at", "updated_at")
-
-
-class ScrimListSerializer(serializers.ModelSerializer):
-    """Simplified serializer for list views"""
-
-    host_name = serializers.CharField(source="host.user.username", read_only=True)
-
-    class Meta:
-        model = Scrim
-        fields = (
-            "id",
-            "title",
-            "game_name",
-            "game_mode",
-            "host_name",
-            "max_participants",
-            "current_participants",
-            "entry_fee",
-            "scrim_start",
-            "status",
-            "banner_image",
-            "is_featured",
-        )
 
 
 class TournamentRegistrationSerializer(serializers.ModelSerializer):
@@ -350,86 +309,6 @@ class TournamentRegistrationSerializer(serializers.ModelSerializer):
         registration = TournamentRegistration.objects.create(
             tournament=tournament,
             player=registering_player,
-            team=team_instance,
-            team_name=team_name,
-            team_members=team_members_data,
-            **validated_data,
-        )
-
-        return registration
-
-
-class ScrimRegistrationSerializer(serializers.ModelSerializer):
-    player = PlayerProfileSerializer(read_only=True)
-    player_id = serializers.IntegerField(write_only=True, required=False)
-    scrim = ScrimListSerializer(read_only=True)
-    scrim_id = serializers.IntegerField(write_only=True, required=False)
-    team_name = serializers.CharField(required=True, max_length=100)
-    player_usernames = serializers.ListField(
-        child=serializers.CharField(max_length=150), write_only=True, required=True
-    )
-    team_id = serializers.IntegerField(write_only=True, required=False, allow_null=True)
-    save_as_team = serializers.BooleanField(write_only=True, default=False)
-
-    class Meta:
-        model = ScrimRegistration
-        fields = "__all__"
-        read_only_fields = ("player", "scrim", "registered_at", "updated_at", "team_members")
-
-    def create(self, validated_data):
-        player_usernames = validated_data.pop("player_usernames")
-        team_name = validated_data.pop("team_name")
-        save_as_team = validated_data.pop("save_as_team", False)
-        team_id = validated_data.pop("team_id", None)
-
-        # Extract scrim and player from validated_data (may be IDs or objects)
-        scrim = validated_data.pop("scrim", None)
-        scrim_id = validated_data.pop("scrim_id", None)
-        if not scrim and scrim_id:
-            scrim = Scrim.objects.get(id=scrim_id)
-
-        player = validated_data.pop("player", None)
-        player_id = validated_data.pop("player_id", None)
-        if not player:
-            if player_id:
-                player = PlayerProfile.objects.get(id=player_id)
-            else:
-                player = self.context["request"].user.player_profile
-
-        team_instance = None
-        if team_id:
-            try:
-                team_instance = Team.objects.get(id=team_id)
-            except Team.DoesNotExist:
-                raise serializers.ValidationError({"team_id": "Team not found"})
-
-        if save_as_team and not team_instance:
-            team_instance = Team.objects.create(name=team_name, captain=player.user)
-            for username in player_usernames:
-                user_obj = User.objects.filter(username=username, user_type="player").first()
-                TeamMember.objects.create(
-                    team=team_instance, username=username, user=user_obj, is_captain=(username == player.user.username)
-                )
-
-        if not team_instance:
-            team_instance = Team.objects.create(name=team_name, captain=player.user, is_temporary=True)
-
-        team_members_data = []
-        for username in player_usernames:
-            user_obj = User.objects.filter(username=username, user_type="player").first()
-            team_members_data.append(
-                {
-                    "username": username,
-                    "is_registered": user_obj is not None,
-                    "player_id": user_obj.player_profile.id
-                    if user_obj and hasattr(user_obj, "player_profile")
-                    else None,
-                }
-            )
-
-        registration = ScrimRegistration.objects.create(
-            scrim=scrim,
-            player=player,
             team=team_instance,
             team_name=team_name,
             team_members=team_members_data,

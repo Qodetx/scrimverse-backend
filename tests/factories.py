@@ -10,7 +10,7 @@ from factory.django import DjangoModelFactory
 from faker import Faker
 
 from accounts.models import HostProfile, PlayerProfile, Team, TeamStatistics, User
-from tournaments.models import HostRating, Scrim, ScrimRegistration, Tournament, TournamentRegistration
+from tournaments.models import HostRating, Tournament, TournamentRegistration
 
 fake = Faker()
 
@@ -108,41 +108,6 @@ class TournamentFactory(DjangoModelFactory):
         ]
 
 
-class ScrimFactory(DjangoModelFactory):
-    """Factory for Scrim model"""
-
-    class Meta:
-        model = Scrim
-
-    host = factory.SubFactory(HostProfileFactory)
-    title = factory.LazyAttribute(lambda _: f"{fake.catch_phrase()} Scrim")
-    description = factory.LazyAttribute(lambda _: fake.text(max_nb_chars=300))
-    game_name = factory.Iterator(["BGMI", "COD", "Freefire", "Scarfall"])
-    game_mode = factory.Iterator(["Solo", "Duo", "Squad"])
-    max_participants = factory.Iterator([20, 30, 50])
-    current_participants = 0
-    entry_fee = factory.LazyAttribute(lambda _: fake.pydecimal(left_digits=2, right_digits=2, positive=True))
-
-    @factory.lazy_attribute
-    def registration_start(self):
-        return timezone.now()
-
-    @factory.lazy_attribute
-    def registration_end(self):
-        return self.registration_start + timedelta(hours=2)
-
-    @factory.lazy_attribute
-    def scrim_start(self):
-        return self.registration_end + timedelta(hours=1)
-
-    @factory.lazy_attribute
-    def scrim_end(self):
-        return self.scrim_start + timedelta(hours=2)
-
-    status = "upcoming"
-    rules = factory.LazyAttribute(lambda _: fake.text(max_nb_chars=200))
-
-
 class TournamentRegistrationFactory(DjangoModelFactory):
     """Factory for TournamentRegistration model"""
 
@@ -159,23 +124,6 @@ class TournamentRegistrationFactory(DjangoModelFactory):
 
     payment_status = False
     status = "pending"
-
-
-class ScrimRegistrationFactory(DjangoModelFactory):
-    """Factory for ScrimRegistration model"""
-
-    class Meta:
-        model = ScrimRegistration
-
-    scrim = factory.SubFactory(ScrimFactory)
-    player = factory.SubFactory(PlayerProfileFactory)
-    team_name = factory.LazyAttribute(lambda _: fake.company())
-
-    @factory.lazy_attribute
-    def team_members(self):
-        return [fake.name() for _ in range(2)]
-
-    status = "confirmed"
 
 
 class HostRatingFactory(DjangoModelFactory):

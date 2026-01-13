@@ -6,7 +6,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from tests.factories import PlayerProfileFactory, UserFactory
-from tournaments.models import ScrimRegistration, TournamentRegistration
+from tournaments.models import TournamentRegistration
 
 # Tournament Registration Tests
 
@@ -114,71 +114,6 @@ def test_unauthenticated_cannot_register(api_client, tournament):
 # This should be handled with try/except in the view for production
 
 
-# Scrim Registration Tests
-
-
-@pytest.mark.django_db
-def test_player_register_for_scrim(authenticated_client, scrim, player_user, test_players):
-    """Test player can register for scrim"""
-    # Scrim is Duo mode by default (requires 2 players)
-    data = {
-        "team_name": "Scrim Team",
-        "player_usernames": [
-            player_user.username,
-            test_players[0].username,
-        ],
-    }
-    response = authenticated_client.post(f"/api/tournaments/scrims/{scrim.id}/register/", data, format="json")
-
-    assert response.status_code == status.HTTP_201_CREATED
-    assert ScrimRegistration.objects.filter(scrim=scrim).exists()
-
-    scrim.refresh_from_db()
-    assert scrim.current_participants == 1
-
-
-@pytest.mark.django_db
-def test_register_twice_for_scrim_fails(api_client, scrim, test_players):
-    """Test cannot register for same scrim twice"""
-    # Create a player
-    player_user = UserFactory(user_type="player")
-    PlayerProfileFactory(user=player_user)
-
-    client = APIClient()
-    client.force_authenticate(user=player_user)
-
-    data = {
-        "team_name": "First Team",
-        "player_usernames": [
-            player_user.username,
-            test_players[0].username,
-        ],
-    }
-    # First registration
-    response1 = client.post(f"/api/tournaments/scrims/{scrim.id}/register/", data, format="json")
-    assert response1.status_code == status.HTTP_201_CREATED
-
-    # Second registration should fail
-    data2 = {
-        "team_name": "Another Team",
-        "player_usernames": [
-            player_user.username,
-            test_players[0].username,
-        ],
-    }
-    response2 = client.post(f"/api/tournaments/scrims/{scrim.id}/register/", data2, format="json")
-    assert response2.status_code == status.HTTP_400_BAD_REQUEST
-
-
-@pytest.mark.django_db
-def test_host_cannot_register_for_scrim(host_authenticated_client, scrim):
-    """Test host cannot register for scrim"""
-    data = {"team_name": "Host Scrim Team", "player_usernames": ["Host"]}
-    response = host_authenticated_client.post(f"/api/tournaments/scrims/{scrim.id}/register/", data, format="json")
-
-    assert response.status_code == status.HTTP_403_FORBIDDEN
-
-
 # Player Registrations Tests
 
 
@@ -191,17 +126,6 @@ def test_get_player_tournament_registrations(authenticated_client, tournament_re
     results = response.data.get("results", response.data)
     assert len(results) == 1
     assert results[0]["tournament"]["id"] == tournament_registration.tournament.id
-
-
-@pytest.mark.django_db
-def test_get_player_scrim_registrations(authenticated_client, scrim_registration):
-    """Test getting player's scrim registrations"""
-    response = authenticated_client.get("/api/tournaments/scrims/my-registrations/")
-
-    assert response.status_code == status.HTTP_200_OK
-    results = response.data.get("results", response.data)
-    assert len(results) == 1
-    assert results[0]["scrim"]["id"] == scrim_registration.scrim.id
 
 
 @pytest.mark.django_db

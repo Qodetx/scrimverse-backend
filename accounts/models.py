@@ -39,11 +39,9 @@ class PlayerProfile(models.Model):
 
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="player_profile")
     preferred_games = models.JSONField(default=list, blank=True)  # List of games
-    skill_level = models.CharField(max_length=50, blank=True)
     bio = models.TextField(blank=True)
     total_tournaments_participated = models.IntegerField(default=0)
     total_wins = models.IntegerField(default=0)
-    wallet_balance = models.DecimalField(max_digits=10, decimal_places=2, default=0.00)
 
     def __str__(self):
         return f"Player: {self.user.username}"
@@ -60,7 +58,6 @@ class HostProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="host_profile")
     bio = models.TextField(blank=True)
     website = models.URLField(blank=True)
-    social_links = models.JSONField(default=dict, blank=True)  # {"twitter": "", "discord": ""}
     total_tournaments_hosted = models.IntegerField(default=0)
     rating = models.DecimalField(max_digits=3, decimal_places=2, default=0.00)  # Out of 5
     total_ratings = models.IntegerField(default=0)
