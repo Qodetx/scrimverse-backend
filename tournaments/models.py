@@ -423,3 +423,4 @@ class HostRating(models.Model):
 
     class Meta:
         db_table = "host_ratings"
+        ordering = ["-created_at"]

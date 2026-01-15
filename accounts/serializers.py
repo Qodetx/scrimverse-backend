@@ -35,10 +35,44 @@ class PlayerProfileSerializer(serializers.ModelSerializer):
     global_rank = serializers.SerializerMethodField()
     tournament_rank = serializers.SerializerMethodField()
     scrim_rank = serializers.SerializerMethodField()
+    invitation_status = serializers.SerializerMethodField()
 
     class Meta:
         model = PlayerProfile
-        fields = "__all__"
+        fields = (
+            "id",
+            "user",
+            "preferred_games",
+            "bio",
+            "total_tournaments_participated",
+            "total_wins",
+            "current_team",
+            "matches_played",
+            "tournament_wins",
+            "scrim_wins",
+            "global_rank",
+            "tournament_rank",
+            "scrim_rank",
+            "invitation_status",
+        )
+
+    def get_invitation_status(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return None
+
+        # Check if requesting user is a captain of ANY team
+        # (Though usually they only have one)
+        managed_team_ids = Team.objects.filter(captain=request.user).values_list("id", flat=True)
+        if not managed_team_ids:
+            return None
+
+        # Check for pending invitation from any of those teams to this player
+        invitation = TeamJoinRequest.objects.filter(
+            team_id__in=managed_team_ids, player=obj.user, request_type="invite", status="pending"
+        ).first()
+
+        return invitation.status if invitation else None
 
     def get_current_team(self, obj):
         membership = TeamMember.objects.filter(user=obj.user).first()
@@ -48,13 +82,20 @@ class PlayerProfileSerializer(serializers.ModelSerializer):
             return {
                 "id": team.id,
                 "name": team.name,
+                "profile_picture": team.profile_picture.url if team.profile_picture else None,
                 "is_captain": membership.is_captain,
                 "members": [
                     {
                         "id": m.user.id if m.user else None,
                         "username": m.username,
                         "is_captain": m.is_captain,
-                        "profile_picture": m.user.profile_picture.url if m.user and m.user.profile_picture else None,
+                        "user": {
+                            "profile_picture": m.user.profile_picture.url
+                            if m.user and m.user.profile_picture
+                            else None,
+                        }
+                        if m.user
+                        else None,
                     }
                     for m in members
                 ],

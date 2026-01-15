@@ -253,64 +253,33 @@ def update_host_dashboard_stats(host_id):
     try:
         host_profile = HostProfile.objects.get(id=host_id)
         now = timezone.now()
-        one_week_ago = now - timezone.timedelta(days=7)
-        one_month_ago = now - timezone.timedelta(days=30)
 
-        # Basic stats
-        active_tournaments = Tournament.objects.filter(host=host_profile, status__in=["upcoming", "ongoing"]).count()
-
-        live_now_count = Tournament.objects.filter(host=host_profile, status="ongoing").count()
-
-        total_tournaments = Tournament.objects.filter(host=host_profile).count()
+        # Total matches hosted (tournaments + scrims)
+        matches_hosted = Tournament.objects.filter(host=host_profile).count()
 
         # Participant stats
         total_participants = TournamentRegistration.objects.filter(
             tournament__host=host_profile, status="confirmed"
         ).count()
 
-        participants_this_week = TournamentRegistration.objects.filter(
-            tournament__host=host_profile, status="confirmed", registered_at__gte=one_week_ago
-        ).count()
+        # Prize pool calculations (sum of all prize pools)
+        total_prize_pool = Tournament.objects.filter(host=host_profile).aggregate(total=Sum("prize_pool"))["total"] or 0
 
-        # Revenue calculations
-        revenue_tournaments = (
-            TournamentRegistration.objects.filter(tournament__host=host_profile, status="confirmed").aggregate(
-                total=Sum("tournament__entry_fee")
-            )["total"]
-            or 0
-        )
-
-        total_revenue = revenue_tournaments
-
-        # Monthly growth
-        rev_tournaments_month = (
-            TournamentRegistration.objects.filter(
-                tournament__host=host_profile, status="confirmed", registered_at__gte=one_month_ago
-            ).aggregate(total=Sum("tournament__entry_fee"))["total"]
-            or 0
-        )
-
-        growth_this_month = rev_tournaments_month
-
-        # Average participation
-        avg_participation = (total_participants / total_tournaments) if total_tournaments > 0 else 0
+        # Host rating from profile
+        host_rating = float(host_profile.rating)
 
         stats = {
-            "active_tournaments": active_tournaments,
-            "live_now_count": live_now_count,
-            "total_tournaments": total_tournaments,
+            "matches_hosted": matches_hosted,
             "total_participants": total_participants,
-            "participants_weekly_growth": participants_this_week,
-            "total_revenue": float(total_revenue),
-            "revenue_monthly_growth": float(growth_this_month),
-            "avg_participation": round(avg_participation, 1),
+            "total_prize_pool": float(total_prize_pool),
+            "host_rating": host_rating,
             "last_updated": now.isoformat(),
         }
 
         # Cache for 10 minutes
         cache.set(f"host:dashboard:{host_id}", stats, 600)
 
-        logger.info(f"Host {host_id} dashboard stats updated: {total_tournaments} tournaments")
+        logger.info(f"Host {host_id} dashboard stats updated: {matches_hosted} matches hosted")
         return stats
 
     except HostProfile.DoesNotExist:

@@ -126,6 +126,7 @@ class TournamentListSerializer(serializers.ModelSerializer):
             "plan_type",
             "homepage_banner",
             "event_mode",
+            "updated_at",
         )
 
     def get_host(self, obj):

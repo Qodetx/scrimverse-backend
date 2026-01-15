@@ -1165,16 +1165,14 @@ class HostDashboardStatsView(APIView):
 
             # Return basic stats as fallback while calculating
             stats = {
-                "active_tournaments": Tournament.objects.filter(
-                    host=host_profile, status__in=["upcoming", "ongoing"]
+                "matches_hosted": Tournament.objects.filter(host=host_profile).count(),
+                "total_participants": TournamentRegistration.objects.filter(
+                    tournament__host=host_profile, status="confirmed"
                 ).count(),
-                "live_now_count": Tournament.objects.filter(host=host_profile, status="ongoing").count(),
-                "total_tournaments": Tournament.objects.filter(host=host_profile).count(),
-                "total_participants": 0,
-                "participants_weekly_growth": 0,
-                "total_revenue": 0,
-                "revenue_monthly_growth": 0,
-                "avg_participation": 0,
+                "total_prize_pool": float(
+                    Tournament.objects.filter(host=host_profile).aggregate(total=Sum("prize_pool"))["total"] or 0
+                ),
+                "host_rating": float(host_profile.rating),
                 "message": "Full statistics are being calculated in the background...",
             }
 
@@ -1182,40 +1180,82 @@ class HostDashboardStatsView(APIView):
         live_tournaments = Tournament.objects.filter(host=host_profile, status="ongoing")
         live_serializer = TournamentListSerializer(live_tournaments, many=True)
 
-        upcoming_tournaments = Tournament.objects.filter(host=host_profile, status="upcoming")[:5]
+        upcoming_tournaments = Tournament.objects.filter(host=host_profile, status="upcoming").order_by(
+            "tournament_start"
+        )[:10]
         upcoming_serializer = TournamentListSerializer(upcoming_tournaments, many=True)
 
-        # Recent Activity
+        past_tournaments = Tournament.objects.filter(host=host_profile, status="completed").order_by("-updated_at")[:10]
+        past_serializer = TournamentListSerializer(past_tournaments, many=True)
+
+        # Recent Activity - Multiple types
+        recent_activity = []
+
+        # 1. Recent Registrations
         recent_registrations = TournamentRegistration.objects.filter(tournament__host=host_profile).order_by(
             "-registered_at"
-        )[:5]
+        )[:3]
 
-        recent_activity = []
         for reg in recent_registrations:
             recent_activity.append(
                 {
                     "type": "registration",
                     "message": f"New team registered for {reg.tournament.title}",
-                    "team_name": reg.team_name or reg.player.user.username,
+                    "detail": reg.team_name or reg.player.user.username,
                     "timestamp": reg.registered_at,
                 }
             )
 
-        # Add welcome message if not enough activity
-        if len(recent_activity) < 3:
+        # 2. Tournament Status Changes (Started/Completed)
+        recent_started = Tournament.objects.filter(host=host_profile, status="ongoing").order_by("-updated_at")[:2]
+
+        for tournament in recent_started:
             recent_activity.append(
                 {
-                    "type": "info",
-                    "message": "Welcome to your new dashboard!",
-                    "timestamp": timezone.now(),
+                    "type": "tournament_started",
+                    "message": f"{tournament.title} has started",
+                    "detail": f"Round {tournament.current_round} is now live",
+                    "timestamp": tournament.updated_at,
                 }
             )
+
+        recent_completed = Tournament.objects.filter(host=host_profile, status="completed").order_by("-updated_at")[:2]
+
+        for tournament in recent_completed:
+            recent_activity.append(
+                {
+                    "type": "tournament_completed",
+                    "message": f"{tournament.title} has been completed",
+                    "detail": "All rounds finished",
+                    "timestamp": tournament.updated_at,
+                }
+            )
+
+        # 3. Recent Host Ratings
+        recent_ratings = HostRating.objects.filter(host=host_profile).order_by("-created_at")[:2]
+
+        for rating in recent_ratings:
+            recent_activity.append(
+                {
+                    "type": "rating_received",
+                    "message": f"New rating received: {rating.rating}/5",
+                    "detail": rating.review[:50] + "..."
+                    if rating.review and len(rating.review) > 50
+                    else rating.review or "No comment",
+                    "timestamp": rating.created_at,
+                }
+            )
+
+        # Sort all activities by timestamp (newest first) and limit to 10
+        recent_activity.sort(key=lambda x: x["timestamp"], reverse=True)
+        recent_activity = recent_activity[:10]
 
         return Response(
             {
                 "stats": stats,
                 "live_tournaments": live_serializer.data,
                 "upcoming_tournaments": upcoming_serializer.data,
+                "past_tournaments": past_serializer.data,
                 "recent_activity": recent_activity,
             }
         )
