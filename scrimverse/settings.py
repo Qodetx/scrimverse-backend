@@ -31,6 +31,7 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt",
     "corsheaders",
     "django_redis",
+    "storages",  # AWS S3 storage
     # Local apps
     "accounts",
     "tournaments",
@@ -108,13 +109,43 @@ TIME_ZONE = "Asia/Kolkata"
 USE_I18N = True
 USE_TZ = True
 
-# Static files (CSS, JavaScript, Images)
-STATIC_URL = "static/"
-STATIC_ROOT = BASE_DIR / "staticfiles"
+# ==================== STATIC & MEDIA FILES CONFIGURATION ====================
 
-# Media files
-MEDIA_URL = "media/"
-MEDIA_ROOT = BASE_DIR / "media"
+# AWS S3 Settings
+USE_S3 = config("USE_S3", default=False, cast=bool)
+
+if USE_S3:
+    # AWS S3 Configuration
+    AWS_ACCESS_KEY_ID = config("AWS_ACCESS_KEY_ID")
+    AWS_SECRET_ACCESS_KEY = config("AWS_SECRET_ACCESS_KEY")
+    AWS_STORAGE_BUCKET_NAME = config("AWS_STORAGE_BUCKET_NAME")
+    AWS_S3_REGION_NAME = config("AWS_S3_REGION_NAME", default="us-east-1")
+    AWS_S3_CUSTOM_DOMAIN = f"{AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com"
+
+    # S3 Object Parameters
+    AWS_S3_OBJECT_PARAMETERS = {
+        "CacheControl": "max-age=86400",  # 1 day cache
+    }
+
+    # Don't add auth query params to URLs
+    AWS_QUERYSTRING_AUTH = False
+
+    # Static files (CSS, JavaScript, Images) - uses custom backend
+    STATICFILES_STORAGE = "scrimverse.storage_backends.StaticStorage"
+    STATIC_URL = f"https://{AWS_S3_CUSTOM_DOMAIN}/static/"
+
+    # Media files (User uploads) - uses custom backend
+    DEFAULT_FILE_STORAGE = "scrimverse.storage_backends.MediaStorage"
+    MEDIA_URL = f"https://{AWS_S3_CUSTOM_DOMAIN}/media/"
+
+else:
+    # Local file storage (Development)
+    STATIC_URL = "static/"
+    STATIC_ROOT = BASE_DIR / "staticfiles"
+
+    MEDIA_URL = "media/"
+    MEDIA_ROOT = BASE_DIR / "media"
+
 
 # Default primary key field type
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
