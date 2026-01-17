@@ -104,11 +104,17 @@ class LoginView(APIView):
         password = serializer.validated_data["password"]
         user_type = serializer.validated_data["user_type"]
 
+        # Check if user exists
+        try:
+            User.objects.get(email=email)
+        except User.DoesNotExist:
+            return Response({"error": "No account found with this email address"}, status=status.HTTP_401_UNAUTHORIZED)
+
         # Authenticate user
         user = authenticate(request, username=email, password=password)
 
         if user is None:
-            return Response({"error": "Invalid credentials"}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({"error": "Incorrect password. Please try again."}, status=status.HTTP_401_UNAUTHORIZED)
 
         # Check user type matches
         if user.user_type != user_type:

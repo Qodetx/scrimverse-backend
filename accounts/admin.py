@@ -176,10 +176,11 @@ class AadharVerificationAdmin(admin.ModelAdmin):
 
     def approve_verification(self, request, queryset):
         """Approve Aadhar verification for selected hosts"""
-        updated = queryset.update(verification_status="approved", verified=True)
+        updated = queryset.update(verification_status="approved")
         self.message_user(
             request,
-            f"✅ Successfully approved {updated} host(s). They can now access their dashboard.",
+            f"✅ Successfully approved {updated} host(s). They can now access their dashboard. "
+            f"Note: Use 'Verify Hosts' action separately to give them the verified badge.",
             level="success",
         )
 
@@ -187,7 +188,7 @@ class AadharVerificationAdmin(admin.ModelAdmin):
 
     def reject_verification(self, request, queryset):
         """Reject Aadhar verification for selected hosts"""
-        updated = queryset.update(verification_status="rejected", verified=False)
+        updated = queryset.update(verification_status="rejected")
         self.message_user(
             request,
             f"❌ Rejected {updated} host(s). Please add rejection notes in each host's detail page.",
@@ -416,13 +417,17 @@ class HostProfileAdmin(admin.ModelAdmin):
             },
         ),
         (
-            "Statistics",
+            "Trust & Statistics",
             {
                 "fields": ("total_tournaments_hosted", "rating", "total_ratings", "verified"),
+                "description": (
+                    "<strong>Verified Badge:</strong> The blue checkmark badge shown on host profiles. "
+                    "This is a trust indicator for premium/established hosts and is independent of Aadhar approval."
+                ),
             },
         ),
         (
-            "Aadhar Verification",
+            "Aadhar Verification (Access Control)",
             {
                 "fields": (
                     "verification_status",
@@ -432,6 +437,11 @@ class HostProfileAdmin(admin.ModelAdmin):
                     "verification_notes",
                 ),
                 "classes": ("collapse",),
+                "description": (
+                    "<strong>Verification Status:</strong> Controls whether the host can access their dashboard. "
+                    "'Approved' grants access, 'Pending' blocks access, 'Rejected' blocks access. "
+                    "This is separate from the verified badge above."
+                ),
             },
         ),
     )
@@ -545,20 +555,23 @@ class HostProfileAdmin(admin.ModelAdmin):
 
     def approve_verification(self, request, queryset):
         """Approve Aadhar verification for selected hosts"""
-        updated = queryset.update(verification_status="approved", verified=True)
-        self.message_user(request, f"{updated} host(s) verification approved.")
+        updated = queryset.update(verification_status="approved")
+        self.message_user(
+            request,
+            f"{updated} host(s) Aadhar verification approved. Use 'Verify Hosts' to add verified badge separately.",
+        )
 
-    approve_verification.short_description = "✓ Approve Verification"
+    approve_verification.short_description = "✓ Approve Aadhar Verification"
 
     def reject_verification(self, request, queryset):
         """Reject Aadhar verification for selected hosts"""
-        updated = queryset.update(verification_status="rejected", verified=False)
+        updated = queryset.update(verification_status="rejected")
         self.message_user(
             request,
-            f"{updated} host(s) verification rejected. Please add rejection notes in the host profile.",
+            f"{updated} host(s) Aadhar verification rejected. Please add rejection notes in the host profile.",
         )
 
-    reject_verification.short_description = "✗ Reject Verification"
+    reject_verification.short_description = "✗ Reject Aadhar Verification"
 
     def export_hosts_csv(self, request, queryset):
         """Export hosts to CSV"""
