@@ -1,6 +1,8 @@
 """
 Test cases for Platform Stats API
 """
+from django.core.cache import cache
+
 import pytest
 from rest_framework import status
 
@@ -40,6 +42,7 @@ def test_platform_stats_returns_correct_data(api_client, tournament, player_user
 @pytest.mark.django_db
 def test_platform_stats_prize_money_only_completed(api_client, host_user):
     """Test that prize money only counts completed tournaments"""
+    cache.clear()
     # Create tournaments with different statuses
     TournamentFactory(host=host_user.host_profile, status="upcoming", prize_pool="1000.00")
     TournamentFactory(host=host_user.host_profile, status="ongoing", prize_pool="2000.00")

@@ -617,7 +617,7 @@ class GetTeamPlayersView(generics.GenericAPIView):
     def get(self, request, tournament_id, registration_id):
         try:
             tournament = Tournament.objects.get(id=tournament_id)
-            registration = TournamentRegistration.objects.select_related('team', 'player__user').get(
+            registration = TournamentRegistration.objects.select_related("team", "player__user").get(
                 id=registration_id, tournament=tournament
             )
         except (Tournament.DoesNotExist, TournamentRegistration.DoesNotExist):
@@ -627,35 +627,36 @@ class GetTeamPlayersView(generics.GenericAPIView):
 
         # Try to get players from team_members JSON field first
         team_members = registration.team_members or []
-        
+
         if team_members:
             from accounts.models import User
-            
+
             # Enrich with player profile data from team_members JSON
             for member in team_members:
                 # Try to get player by ID first, then by username
                 player_id = member.get("id")
                 username = member.get("username")
-                
+
                 player_profile = None
-                
+
                 if player_id:
                     try:
                         player_profile = PlayerProfile.objects.select_related("user").get(id=player_id)
                     except PlayerProfile.DoesNotExist:
                         pass
-                
+
                 if not player_profile and username:
                     try:
-                        user = User.objects.get(username=username, user_type='player')
+                        user = User.objects.get(username=username, user_type="player")
                         player_profile = user.player_profile
                     except (User.DoesNotExist, PlayerProfile.DoesNotExist, AttributeError):
                         pass
-                
+
                 if player_profile:
                     players_data.append(
                         {
                             "id": player_profile.id,
+                            "user_id": player_profile.user.id,
                             "username": player_profile.user.username,
                             "preferred_games": player_profile.preferred_games,
                             "bio": player_profile.bio,
@@ -665,14 +666,16 @@ class GetTeamPlayersView(generics.GenericAPIView):
                             "is_captain": player_profile.id == registration.player_id,
                         }
                     )
-        
+
         # If no players from team_members, try to get from Team model
         elif registration.team:
             from accounts.models import TeamMember
-            
+
             # Get all team members from the Team
-            team_members_qs = TeamMember.objects.filter(team=registration.team).select_related('user', 'user__player_profile')
-            
+            team_members_qs = TeamMember.objects.filter(team=registration.team).select_related(
+                "user", "user__player_profile"
+            )
+
             for team_member in team_members_qs:
                 try:
                     player_profile = team_member.user.player_profile

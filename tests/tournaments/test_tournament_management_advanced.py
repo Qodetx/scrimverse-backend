@@ -107,6 +107,11 @@ def test_start_tournament():
 @pytest.mark.django_db
 def test_host_dashboard_stats_view():
     """Test getting host dashboard data"""
+    from django.core.cache import cache
+
+    # Clear cache to ensure fresh calculation
+    cache.clear()
+
     host_profile = HostProfileFactory()
     host_user = host_profile.user
 
@@ -123,7 +128,7 @@ def test_host_dashboard_stats_view():
 
     assert response.status_code == status.HTTP_200_OK
     # Stats are within the 'stats' key
-    assert response.data["stats"]["active_tournaments"] >= 1
+    assert response.data["stats"]["matches_hosted"] >= 2
     assert "live_tournaments" in response.data
     assert "recent_activity" in response.data
     # Check for recent activity - registration record

@@ -149,13 +149,13 @@ def test_update_host_dashboard_stats():
 
     result = update_host_dashboard_stats(host.id)
 
-    assert result["active_tournaments"] == 1
-    assert result["total_revenue"] == 100.0
+    assert result["matches_hosted"] == 1
     assert result["total_participants"] == 1
+    assert "total_prize_pool" in result
 
     cached_stats = cache.get(f"host:dashboard:{host.id}")
     assert cached_stats is not None
-    assert cached_stats["active_tournaments"] == 1
+    assert cached_stats["matches_hosted"] == 1
 
 
 @pytest.mark.django_db
