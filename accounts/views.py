@@ -1,3 +1,4 @@
+import logging
 from datetime import timedelta
 
 from django.contrib.auth import authenticate
@@ -26,6 +27,8 @@ from accounts.serializers import (
 )
 from accounts.tasks import process_team_invitation
 from tournaments.models import RoundScore, TournamentRegistration
+
+logger = logging.getLogger(__name__)
 
 
 class PlayerRegistrationView(generics.CreateAPIView):
@@ -97,6 +100,8 @@ class LoginView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
+        logger = logging.getLogger("accounts")
+
         serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -104,26 +109,36 @@ class LoginView(APIView):
         password = serializer.validated_data["password"]
         user_type = serializer.validated_data["user_type"]
 
+        logger.info(f"Login attempt - Email: {email}, User Type: {user_type}")
+
         # Check if user exists
         try:
-            User.objects.get(email=email)
+            user_obj = User.objects.get(email=email)
+            logger.debug(f"User found - ID: {user_obj.id}, Username: {user_obj.username}, Type: {user_obj.user_type}")
         except User.DoesNotExist:
+            logger.warning(f"Login failed - No account found for email: {email}")
             return Response({"error": "No account found with this email address"}, status=status.HTTP_401_UNAUTHORIZED)
 
         # Authenticate user
         user = authenticate(request, username=email, password=password)
 
         if user is None:
+            logger.warning(f"Login failed - Incorrect password for email: {email}")
             return Response({"error": "Incorrect password. Please try again."}, status=status.HTTP_401_UNAUTHORIZED)
 
         # Check user type matches
         if user.user_type != user_type:
+            logger.warning(
+                f"Login failed - User type mismatch. Expected: {user_type}, Actual: {user.user_type} for email: {email}"
+            )
             return Response(
                 {"error": f"This account is not registered as a {user_type}"}, status=status.HTTP_403_FORBIDDEN
             )
 
         # Generate JWT tokens
         refresh = RefreshToken.for_user(user)
+
+        logger.info(f"Login successful - User ID: {user.id}, Username: {user.username}, Type: {user.user_type}")
 
         return Response(
             {
@@ -240,6 +255,7 @@ class GoogleAuthView(APIView):
                     HostProfile.objects.create(user=user)
 
                 message = "Account created successfully!"
+                logger.debug(f"Google OAuth account created - ID: {user.id}, Username: {username}, Type: {user_type}")
 
             # Generate JWT tokens
             refresh = RefreshToken.for_user(user)
@@ -301,6 +317,7 @@ class CurrentPlayerProfileView(APIView):
         serializer = PlayerProfileSerializer(user.player_profile, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
+            logger.debug(f"Player profile updated - User: {user.id}, Username: {user.username}")
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -339,6 +356,7 @@ class CurrentHostProfileView(APIView):
         serializer = HostProfileSerializer(user.host_profile, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
+            logger.debug(f"Host profile updated - User: {user.id}, Username: {user.username}")
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
@@ -520,6 +538,7 @@ class PlayerUsernameSearchView(APIView):
                 res["profile_picture"] = request.build_absolute_uri(res["profile_picture"])
 
         return Response({"results": results}, status=status.HTTP_200_OK)
+        logger.debug(f"Player search results - Query: {query}, Results: {len(results)}")
 
 
 class HostSearchView(APIView):
@@ -561,6 +580,7 @@ class HostSearchView(APIView):
                 res["profile_picture"] = request.build_absolute_uri(res["profile_picture"])
 
         return Response({"results": results}, status=status.HTTP_200_OK)
+        logger.debug(f"Host search results - Query: {query}, Results: {len(results)}")
 
 
 class IsPlayerUser(permissions.BasePermission):
@@ -645,6 +665,10 @@ class TeamViewSet(viewsets.ModelViewSet):
         return Response({"message": "Successfully left the team"}, status=status.HTTP_200_OK)
 
     def perform_create(self, serializer):
+        logger.debug(
+            f"Create team request - Captain: {self.request.user.id}, Team name: {self.request.data.get('name')}"
+        )
+
         # Check if user is already in a PERMANENT team (temporary teams are allowed)
         existing_membership = TeamMember.objects.filter(
             user=self.request.user, team__is_temporary=False  # Only check for permanent teams
@@ -654,6 +678,7 @@ class TeamViewSet(viewsets.ModelViewSet):
 
         player_usernames = self.request.data.get("player_usernames", [])
         team = serializer.save(captain=self.request.user)
+        logger.debug(f"Team created - ID: {team.id}, Name: {team.name}, Captain: {self.request.user.username}")
 
         # Add captain as the first member
         TeamMember.objects.create(
@@ -687,6 +712,11 @@ class TeamViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def add_member(self, request, pk=None):
         team = self.get_object()
+
+        logger.debug(
+            f"Add member request - Team: {team.id}, Captain: {request.user.id}, New member: {request.data.get('username')}"  # noqa E501
+        )
+
         if team.captain != request.user:
             return Response({"error": "Only the captain can add members"}, status=status.HTTP_403_FORBIDDEN)
 
@@ -705,6 +735,8 @@ class TeamViewSet(viewsets.ModelViewSet):
             return Response({"error": "Member already exists"}, status=status.HTTP_400_BAD_REQUEST)
 
         member = TeamMember.objects.create(team=team, username=username, user=user)
+
+        logger.debug(f"Member added - Team: {team.id}, Member: {username}, User ID: {user.id if user else 'None'}")
 
         return Response(TeamMemberSerializer(member).data, status=status.HTTP_201_CREATED)
 
@@ -760,6 +792,8 @@ class TeamViewSet(viewsets.ModelViewSet):
         """Player requests to join a team"""
         team = self.get_object()
 
+        logger.debug(f"Join request - Team: {team.id}, Player: {request.user.id}")
+
         # Check if user is already in a PERMANENT team
         if TeamMember.objects.filter(user=request.user, team__is_temporary=False).exists():
             return Response({"error": "You are already a member of a team"}, status=status.HTTP_400_BAD_REQUEST)
@@ -783,12 +817,21 @@ class TeamViewSet(viewsets.ModelViewSet):
                     {"message": "You already have a pending invite from this team"}, status=status.HTTP_400_BAD_REQUEST
                 )
 
+        logger.debug(
+            f"Join request created - Team: {team.id}, Player: {request.user.username}, Status: {join_request.status}"
+        )
+
         return Response({"message": "Join request sent"}, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["post"])
     def invite_player(self, request, pk=None):
         """Captain invites a player to the team"""
         team = self.get_object()
+
+        logger.debug(
+            f"Invite player request - Team: {team.id}, Captain: {request.user.id}, Player ID: {request.data.get('player_id')}"  # noqa E501
+        )
+
         if team.captain != request.user:
             return Response({"error": "Only captains can invite players"}, status=status.HTTP_403_FORBIDDEN)
 
@@ -892,47 +935,82 @@ class TeamViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def accept_request(self, request, pk=None):
         """Accept a join request (captain only)"""
+        logger = logging.getLogger("accounts")
         team = self.get_object()
+
+        logger.info(
+            f"Accept request attempt - Team: {team.id} ({team.name}), Captain: {request.user.id} ({request.user.username})"  # noqa E501
+        )
+
         if team.captain != request.user:
+            logger.warning(f"Unauthorized accept attempt - User {request.user.id} is not captain of team {team.id}")
             return Response({"error": "Only captains can accept requests"}, status=status.HTTP_403_FORBIDDEN)
 
         request_id = request.data.get("request_id")
+        logger.debug(f"Processing join request ID: {request_id} for team {team.id}")
 
         join_request = team.join_requests.filter(id=request_id, status="pending").first()
 
         if not join_request:
+            logger.error(f"Join request {request_id} not found or not pending for team {team.id}")
             return Response({"error": "Request not found"}, status=status.HTTP_404_NOT_FOUND)
 
+        logger.info(f"Found join request - Player: {join_request.player.id} ({join_request.player.username})")
+
         # Check if team is full
-        if team.members.count() >= 15:
+        current_member_count = team.members.count()
+        if current_member_count >= 15:
+            logger.warning(f"Team {team.id} is full ({current_member_count}/15 members)")
             return Response({"error": "Team is full"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Add member
-        TeamMember.objects.create(
-            team=team, user=join_request.player, username=join_request.player.username, is_captain=False
-        )
+        try:
+            # Add member
+            new_member = TeamMember.objects.create(
+                team=team, user=join_request.player, username=join_request.player.username, is_captain=False
+            )
+            logger.info(
+                f"Created team member - Member ID: {new_member.id}, User: {join_request.player.username}, Team: {team.name}"  # noqa E501
+            )
 
-        join_request.status = "accepted"
-        join_request.save()
+            join_request.status = "accepted"
+            join_request.save()
+            logger.info(f"Join request {request_id} accepted successfully")
 
-        return Response({"message": "Request accepted"}, status=status.HTTP_200_OK)
+            return Response({"message": "Request accepted"}, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.error(f"Error accepting join request {request_id}: {str(e)}", exc_info=True)
+            return Response({"error": "Failed to accept request"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     @action(detail=True, methods=["post"])
     def reject_request(self, request, pk=None):
         """Reject a join request (captain only)"""
+        logger = logging.getLogger("accounts")
         team = self.get_object()
+
+        logger.info(
+            f"Reject request attempt - Team: {team.id} ({team.name}), Captain: {request.user.id} ({request.user.username})"  # noqa E501
+        )
+
         if team.captain != request.user:
+            logger.warning(f"Unauthorized reject attempt - User {request.user.id} is not captain of team {team.id}")
             return Response({"error": "Only captains can reject requests"}, status=status.HTTP_403_FORBIDDEN)
 
         request_id = request.data.get("request_id")
+        logger.debug(f"Processing rejection for join request ID: {request_id}")
 
         join_request = team.join_requests.filter(id=request_id, status="pending").first()
 
         if not join_request:
+            logger.error(f"Join request {request_id} not found or not pending for team {team.id}")
             return Response({"error": "Request not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        logger.info(f"Rejecting join request from player: {join_request.player.id} ({join_request.player.username})")
 
         join_request.status = "rejected"
         join_request.save()
+
+        logger.info(f"Join request {request_id} rejected successfully")
 
         return Response({"message": "Request rejected"}, status=status.HTTP_200_OK)
 

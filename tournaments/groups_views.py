@@ -2,6 +2,8 @@
 API views for Groups and Matches system
 Handles round configuration, group management, and match operations
 """
+import logging
+
 from django.utils import timezone
 
 from rest_framework import generics, permissions
@@ -11,6 +13,8 @@ from rest_framework.response import Response
 from accounts.models import HostProfile, PlayerProfile, TeamMember
 from tournaments.models import Group, Match, MatchScore, Tournament, TournamentRegistration
 from tournaments.services import TournamentGroupService
+
+logger = logging.getLogger("tournaments")
 
 
 class IsHostUser(permissions.BasePermission):
@@ -34,8 +38,16 @@ class ConfigureRoundView(generics.GenericAPIView):
     permission_classes = [IsHostUser]
 
     def post(self, request, tournament_id, round_number):
+        logger.debug(
+            f"Configure round request - Tournament: {tournament_id}, Round: {round_number}, Host: {request.user.id}"
+        )
+
         host_profile = HostProfile.objects.get(user=request.user)
         tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
+
+        logger.info(
+            f"Configuring round - Tournament: {tournament.name} ({tournament.id}), Round: {round_number}, Event Mode: {tournament.event_mode}"  # noqa E501
+        )
 
         # Validate round number
         if round_number < 1 or round_number > len(tournament.rounds):
@@ -124,6 +136,9 @@ class ConfigureRoundView(generics.GenericAPIView):
 
         # Create groups and matches
         try:
+            logger.debug(
+                f"Creating groups - Num groups: {num_groups}, Teams per group: {teams_per_group}, Matches per group: {matches_per_group}"  # noqa E501
+            )
             groups = TournamentGroupService.create_groups_for_round(
                 tournament=tournament,
                 round_number=round_number,
@@ -131,7 +146,14 @@ class ConfigureRoundView(generics.GenericAPIView):
                 qualifying_per_group=qualifying_per_group,
                 matches_per_group=matches_per_group,
             )
+            logger.info(
+                f"Groups created successfully - Tournament: {tournament.id}, Round: {round_number}, Groups: {len(groups)}"  # noqa E501
+            )
         except Exception as e:
+            logger.error(
+                f"Failed to create groups - Tournament: {tournament.id}, Round: {round_number}, Error: {str(e)}",
+                exc_info=True,
+            )
             return Response({"error": str(e)}, status=500)
 
         # Update tournament round status
@@ -334,6 +356,9 @@ class StartMatchView(generics.GenericAPIView):
                 },
             }
         )
+        logger.debug(
+            f"Match {match_number} started successfully - Tournament: {tournament.name} ({tournament.id}), Group: {group.id}, Match: {match.id}"  # noqa E501
+        )
 
 
 class EndMatchView(generics.GenericAPIView):
@@ -370,6 +395,9 @@ class EndMatchView(generics.GenericAPIView):
                     "ended_at": match.ended_at,
                 },
             }
+        )
+        logger.debug(
+            f"Match {match.match_number} ended successfully - Tournament: {tournament.name} ({tournament.id}), Match: {match.id}"  # noqa E501
         )
 
 
@@ -411,6 +439,7 @@ class SubmitMatchScoresView(generics.GenericAPIView):
             return Response({"error": "scores must be a list"}, status=400)
 
         # Save scores
+        logger.debug(f"Processing {len(scores_data)} score entries for match {match_id}")
         created_count = 0
         for score_entry in scores_data:
             team_id = score_entry.get("team_id")
@@ -432,10 +461,14 @@ class SubmitMatchScoresView(generics.GenericAPIView):
             created_count += 1
 
         # Update RoundScore aggregates
+        logger.debug(f"Calculating round scores - Tournament: {tournament.id}, Round: {match.group.round_number}")
         TournamentGroupService.calculate_round_scores(tournament, match.group.round_number)
 
         # Check if all matches in the group are completed with scores
         group = match.group
+        logger.info(
+            f"Match scores submitted - Match: {match_id}, Scores: {created_count}, Group: {group.group_name}"
+        )  # noqa E501
         all_matches_scored = all(m.scores.exists() for m in group.matches.filter(status="completed"))
 
         if all_matches_scored and group.matches.filter(status="completed").count() == group.matches.count():
@@ -514,6 +547,7 @@ class RoundResultsView(generics.GenericAPIView):
                     "qualified_count": len(qualified),
                 }
             )
+        logger.debug(f"Qualified teams: {all_qualified_teams}")
 
         if is_final_round:
             # Calculate overall winner from final round
@@ -552,6 +586,7 @@ class RoundResultsView(generics.GenericAPIView):
                     "tournament_completed": True,
                 }
             )
+            logger.debug(f"Final round completed - results: {all_final_standings}")
         else:
             # Calculate eliminated teams for each group
             total_eliminated = 0
@@ -603,6 +638,9 @@ class RoundResultsView(generics.GenericAPIView):
                     "total_eliminated": total_eliminated,
                     "next_round": round_number + 1,
                 }
+            )
+            logger.debug(
+                f"Round {round_number} completed - total qualified: {len(all_qualified_teams)}, total eliminated: {total_eliminated}, moving to next round {round_number + 1}"  # noqa E501
             )
 
 
@@ -666,6 +704,7 @@ class GetTeamPlayersView(generics.GenericAPIView):
                             "is_captain": player_profile.id == registration.player_id,
                         }
                     )
+                    logger.debug(f"Team members found - Team ID: {registration.team_id}, Players: {players_data}")
 
         # If no players from team_members, try to get from Team model
         elif registration.team:
@@ -692,6 +731,9 @@ class GetTeamPlayersView(generics.GenericAPIView):
                         }
                     )
                 except (PlayerProfile.DoesNotExist, AttributeError):
+                    logger.warning(
+                        f"Player profile not found for team member - Team ID: {registration.team_id}, User ID: {team_member.user_id}"  # noqa E501
+                    )
                     continue
 
         return Response(

@@ -18,6 +18,8 @@ db.sqlite3
 db.sqlite3-journal
 media/
 staticfiles/
+logs/
+!logs/.gitkeep
 
 # Environment
 .env

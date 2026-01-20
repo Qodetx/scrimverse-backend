@@ -16,6 +16,8 @@ from accounts.models import HostProfile, PlayerProfile, Team, TeamStatistics
 from tournaments.models import Match, MatchScore, RoundScore, Tournament, TournamentRegistration
 from tournaments.services import TournamentGroupService
 
+logger = logging.getLogger(__name__)
+
 
 @shared_task
 def update_tournament_statuses():
@@ -39,6 +41,7 @@ def update_tournament_statuses():
     if updated_ongoing > 0 or updated_completed > 0:
         cache.delete("tournaments:list:all")
 
+    logger.debug(f"Tournament statuses updated - Ongoing: {updated_ongoing}, Completed: {updated_completed}")
     return {
         "updated_ongoing": updated_ongoing,
         "updated_completed": updated_completed,
@@ -56,7 +59,6 @@ def update_leaderboard():
     - Overall rank
     - Total matches played (only from completed events)
     """
-    logger = logging.getLogger(__name__)
     logger.info("Starting comprehensive leaderboard update...")
 
     # Get all non-temporary teams
@@ -210,7 +212,6 @@ def update_platform_statistics():
     Priority: 🔥🔥🔥🔥 CRITICAL
     Impact: 95%+ faster dashboard loads
     """
-    logger = logging.getLogger(__name__)
     logger.info("Calculating platform statistics...")
 
     try:
@@ -604,7 +605,6 @@ def process_tournament_banner(tournament_id, image_path):
         img.save(image_path, optimize=True, quality=85)
 
         # TODO: Generate thumbnail
-        # TODO: Upload to CDN
 
         logger.info(f"Banner processed successfully for tournament {tournament_id}")
         return {"tournament_id": tournament_id, "image_path": image_path, "size": f"{img.width}x{img.height}"}

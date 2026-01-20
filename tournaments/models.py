@@ -152,8 +152,22 @@ class Tournament(models.Model):
         """Get total number of rounds"""
         return len(self.rounds) if self.rounds else 0
 
+    def get_default_banner_path(self):
+        """Get default banner path based on game name"""
+        banner_mapping = {
+            "BGMI": "tournaments/default_banners/BGMI_Banner.jpeg",
+            "COD": "tournaments/default_banners/COD_Banner.jpg",
+            "Freefire": "tournaments/default_banners/Freefire_banner.jpeg",
+            "Scarfall": "tournaments/default_banners/Scarfall_banner.jpeg",
+        }
+        return banner_mapping.get(self.game_name, "tournaments/default_banners/BGMI_Banner.jpeg")
+
     def save(self, *args, **kwargs):
         """Override save to auto-update status and handle plan logic"""
+        # Set default banner for non-premium plans if no banner is uploaded
+        if not self.banner_image and self.plan_type in ["basic", "featured"]:
+            self.banner_image = self.get_default_banner_path()
+
         # Set plan price based on plan type
         plan_prices = {
             "basic": 299.00,
@@ -171,7 +185,6 @@ class Tournament(models.Model):
             # Force Scrim Rules
             self.max_participants = min(self.max_participants, 25)
             self.max_matches = min(self.max_matches, 4)
-            self.plan_type = "basic"
 
             # Force 1 Round structure
             self.rounds = [
@@ -182,15 +195,11 @@ class Tournament(models.Model):
                 }
             ]
 
-            # Scrims don't get featured status usually unless manually set,
-            # but following the existing logic:
-            self.is_featured = False
+        # Auto-set is_featured for featured and premium plans (both tournaments and scrims)
+        if self.plan_type in ["featured", "premium"]:
+            self.is_featured = True
         else:
-            # Auto-set is_featured for featured and premium plans
-            if self.plan_type in ["featured", "premium"]:
-                self.is_featured = True
-            else:
-                self.is_featured = False
+            self.is_featured = False
 
         # Auto-update status on save
         if self.pk and "status" not in kwargs.get("update_fields", []):

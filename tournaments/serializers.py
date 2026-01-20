@@ -31,9 +31,17 @@ class TournamentSerializer(serializers.ModelSerializer):
         )
 
     def validate_banner_image(self, value):
-        """Validate banner image size (max 5MB)"""
+        """Validate banner image size (max 5MB) and premium plan requirement"""
         if value and value.size > 5 * 1024 * 1024:  # 5MB
             raise serializers.ValidationError("Banner image size should not exceed 5MB")
+
+        # Check if banner upload is allowed (premium plan only)
+        if value:
+            plan_type = self.initial_data.get("plan_type", "basic")
+            if plan_type != "premium":
+                raise serializers.ValidationError(
+                    "Custom banner upload is only available for Premium plan. Upgrade to Premium to upload custom banners."  # noqa E501
+                )
         return value
 
     def validate_max_participants(self, value):
@@ -93,9 +101,6 @@ class TournamentSerializer(serializers.ModelSerializer):
             max_matches = attrs.get("max_matches", 4)
             if max_matches > 4:
                 raise serializers.ValidationError({"max_matches": "Scrims support a maximum of 4 matches."})
-
-            # Scrims must have entry_fee >= 0 and basic plan
-            attrs["plan_type"] = "basic"
 
         return attrs
 

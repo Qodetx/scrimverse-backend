@@ -158,6 +158,10 @@ class TournamentCreateView(generics.CreateAPIView):
 
     def create(self, request, *args, **kwargs):
         """Override create to handle file uploads properly"""
+        logger.debug(
+            f"Tournament creation request - Host: {request.user.id}, Event mode: {request.data.get('event_mode')}"
+        )
+
         # Clean empty file fields (FormData sends empty strings for missing files)
         data = request.data.copy()
 
@@ -186,7 +190,11 @@ class TournamentCreateView(generics.CreateAPIView):
 
     def perform_create(self, serializer):
         host_profile = HostProfile.objects.get(user=self.request.user)
-        serializer.save(host=host_profile)
+        tournament = serializer.save(host=host_profile)
+
+        logger.info(
+            f"Tournament created - ID: {tournament.id}, Title: {tournament.title}, Host: {host_profile.id}, Mode: {tournament.event_mode}"  # noqa E501
+        )
 
         # Invalidate caches so next request gets fresh data
         cache.delete("tournaments:list:all")
@@ -278,6 +286,10 @@ class TournamentRegistrationCreateView(generics.CreateAPIView):
         return context
 
     def perform_create(self, serializer):
+        logger.debug(
+            f"Tournament registration request - Player: {self.request.user.id}, Tournament: {self.kwargs['tournament_id']}"  # noqa E501
+        )
+
         player_profile = PlayerProfile.objects.get(user=self.request.user)
         tournament_id = self.kwargs["tournament_id"]
         tournament = Tournament.objects.get(id=tournament_id)
@@ -344,7 +356,11 @@ class TournamentRegistrationCreateView(generics.CreateAPIView):
                     )
 
         # Save registration (serializer will handle team_members creation)
-        serializer.save(player_id=player_profile.id, tournament_id=tournament_id)
+        registration = serializer.save(player_id=player_profile.id, tournament_id=tournament_id)
+
+        logger.info(
+            f"Registration created - ID: {registration.id}, Player: {player_profile.user.username}, Tournament: {tournament.title}, Team: {registration.team_name}"  # noqa E501
+        )
 
         # Update participant count (count teams, not individual players)
         tournament.current_participants += 1
@@ -500,6 +516,10 @@ class StartRoundView(generics.GenericAPIView):
     permission_classes = [IsHostUser]
 
     def post(self, request, tournament_id, round_number):
+        logger.debug(
+            f"Start round request - Tournament: {tournament_id}, Round: {round_number}, Host: {request.user.id}"
+        )
+
         host_profile = HostProfile.objects.get(user=request.user)
         tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
 
@@ -535,6 +555,8 @@ class StartRoundView(generics.GenericAPIView):
         tournament.save(update_fields=["current_round", "round_status", "selected_teams"])
         cache.delete("tournaments:list:all")
 
+        logger.info(f"Round started - Tournament: {tournament.id}, Round: {round_number}, Status: ongoing")
+
         return Response(
             {
                 "message": f"Round {round_number} started",
@@ -558,6 +580,8 @@ class SubmitRoundScoresView(generics.GenericAPIView):
     permission_classes = [IsHostUser]
 
     def post(self, request, tournament_id):
+        logger.debug(f"Submit round scores request - Tournament: {tournament_id}, Host: {request.user.id}")
+
         host_profile = HostProfile.objects.get(user=request.user)
         tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
         round_num = tournament.current_round
@@ -593,6 +617,10 @@ class SubmitRoundScoresView(generics.GenericAPIView):
         tournament.selected_teams[str(round_num)] = selected_team_ids
         tournament.save(update_fields=["selected_teams"])
 
+        logger.info(
+            f"Round scores submitted - Tournament: {tournament.id}, Round: {round_num}, Teams scored: {len(scores_data)}, Top teams: {len(selected_team_ids)}"  # noqa E501
+        )
+
         return Response(
             {
                 "message": f"Scores submitted successfully. Top {qualifying_teams} teams auto-selected.",
@@ -611,6 +639,10 @@ class SelectTeamsView(generics.GenericAPIView):
     permission_classes = [IsHostUser]
 
     def post(self, request, tournament_id):
+        logger.debug(
+            f"Select teams request - Tournament: {tournament_id}, Action: {request.data.get('action')}, Host: {request.user.id}"  # noqa E501
+        )
+
         host_profile = HostProfile.objects.get(user=request.user)
         tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
 
@@ -673,6 +705,10 @@ class SelectTeamsView(generics.GenericAPIView):
 
         tournament.save(update_fields=["selected_teams"])
         cache.delete("tournaments:list:all")
+
+        logger.info(
+            f"Teams {action}ed - Tournament: {tournament.id}, Round: {round_num}, Count: {len(tournament.selected_teams[round_num])}"  # noqa E501
+        )
 
         return Response(
             {
@@ -798,6 +834,10 @@ class SelectWinnerView(generics.GenericAPIView):
     permission_classes = [IsHostUser]
 
     def post(self, request, tournament_id):
+        logger.debug(
+            f"Select winner request - Tournament: {tournament_id}, Winner ID: {request.data.get('winner_id')}, Host: {request.user.id}"  # noqa E501
+        )
+
         host_profile = HostProfile.objects.get(user=request.user)
         tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
 
@@ -852,6 +892,8 @@ class SelectWinnerView(generics.GenericAPIView):
 
         tournament.save(update_fields=["winners"])
         cache.delete("tournaments:list:all")
+
+        logger.info(f"Winner selected - Tournament: {tournament.id}, Round: {round_num}, Winner ID: {winner_id_int}")
 
         # Get winner registration details
         winner_registration = TournamentRegistration.objects.get(id=winner_id_int, tournament=tournament)
@@ -984,6 +1026,10 @@ class EndTournamentView(generics.GenericAPIView):
         tournament.save(update_fields=["status", "current_round"])
         cache.delete("tournaments:list:all")
 
+        logger.info(
+            f"Tournament ended - ID: {tournament.id}, Title: {tournament.title}, All rounds completed: {all_rounds_completed}"  # noqa E501
+        )
+
         # Trigger leaderboard update asynchronously
         update_leaderboard.delay()
 
@@ -1045,6 +1091,10 @@ class UpdateTeamStatusView(generics.GenericAPIView):
     permission_classes = [IsHostUser]
 
     def patch(self, request, tournament_id, registration_id):
+        logger.debug(
+            f"Update team status request - Tournament: {tournament_id}, Registration: {registration_id}, New status: {request.data.get('status')}"  # noqa E501
+        )
+
         host_profile = HostProfile.objects.get(user=request.user)
         tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
 
@@ -1078,6 +1128,10 @@ class UpdateTeamStatusView(generics.GenericAPIView):
         registration.status = new_status
         registration.save()
 
+        logger.info(
+            f"Team status updated - Registration: {registration.id}, Old: {old_status}, New: {new_status}, Tournament: {tournament.id}"  # noqa E501
+        )
+
         return Response(
             {
                 "message": f"Team status updated to {new_status}",
@@ -1106,6 +1160,8 @@ class StartTournamentView(generics.GenericAPIView):
     permission_classes = [IsHostUser]
 
     def post(self, request, tournament_id):
+        logger.debug(f"Start tournament request - Tournament: {tournament_id}, Host: {request.user.id}")
+
         try:
             host_profile = HostProfile.objects.get(user=request.user)
             tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
@@ -1133,6 +1189,8 @@ class StartTournamentView(generics.GenericAPIView):
         tournament.round_status["1"] = "ongoing"
 
         tournament.save(update_fields=["status", "current_round", "round_status"])
+
+        logger.info(f"Tournament started - ID: {tournament.id}, Title: {tournament.title}, Early start: {is_early}")
 
         return Response(
             {
@@ -1259,3 +1317,6 @@ class HostDashboardStatsView(APIView):
                 "recent_activity": recent_activity,
             }
         )
+
+        logger.debug(f"Host dashboard stats - Host ID: {host_profile.id}, Stats: {stats}")
+        logger.debug(f"Host dashboard stats - Host ID: {host_profile.id}, Recent activity: {recent_activity}")
