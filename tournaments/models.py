@@ -164,10 +164,6 @@ class Tournament(models.Model):
 
     def save(self, *args, **kwargs):
         """Override save to auto-update status and handle plan logic"""
-        # Set default banner for non-premium plans if no banner is uploaded
-        if not self.banner_image and self.plan_type in ["basic", "featured"]:
-            self.banner_image = self.get_default_banner_path()
-
         # Set plan price based on plan type
         plan_prices = {
             "basic": 299.00,

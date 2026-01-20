@@ -110,6 +110,7 @@ class TournamentListSerializer(serializers.ModelSerializer):
 
     host_name = serializers.CharField(source="host.user.username", read_only=True)
     host = serializers.SerializerMethodField()
+    banner_image = serializers.SerializerMethodField()
 
     class Meta:
         model = Tournament
@@ -136,6 +137,37 @@ class TournamentListSerializer(serializers.ModelSerializer):
 
     def get_host(self, obj):
         return {"id": obj.host.id, "username": obj.host.user.username}
+
+    def get_banner_image(self, obj):
+        """Return custom banner for premium, default banner for basic/featured"""
+        from django.conf import settings
+
+        # If custom banner exists (premium plan), return it
+        if obj.banner_image:
+            if settings.USE_S3:
+                # S3 URL
+                return obj.banner_image.url
+            else:
+                # Local URL
+                request = self.context.get("request")
+                if request:
+                    return request.build_absolute_uri(obj.banner_image.url)
+                return obj.banner_image.url
+
+        # For basic/featured plans without custom banner, return default banner URL
+        if obj.plan_type in ["basic", "featured"]:
+            default_banner_path = obj.get_default_banner_path()
+            if settings.USE_S3:
+                # Construct S3 URL for default banner
+                return f"https://{settings.AWS_S3_CUSTOM_DOMAIN}/media/{default_banner_path}"
+            else:
+                # Local URL for default banner
+                request = self.context.get("request")
+                if request:
+                    return request.build_absolute_uri(f"{settings.MEDIA_URL}{default_banner_path}")
+                return f"{settings.MEDIA_URL}{default_banner_path}"
+
+        return None
 
 
 class TournamentRegistrationSerializer(serializers.ModelSerializer):
