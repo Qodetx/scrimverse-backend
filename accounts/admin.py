@@ -810,6 +810,8 @@ class TeamJoinRequestAdmin(admin.ModelAdmin):
 
     def player_display(self, obj):
         """Display player with link"""
+        if not obj.player or not obj.player.user:
+            return "N/A"
         return format_html(
             '<a href="/admin/accounts/playerprofile/{}/change/">{}</a>',
             obj.player.id,
