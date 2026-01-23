@@ -26,6 +26,24 @@ from .services import phonepe_service
 logger = logging.getLogger(__name__)
 
 
+def convert_to_dict(obj):
+    """
+    Recursively convert PhonePe SDK objects to JSON-serializable dictionaries
+    """
+    if obj is None:
+        return None
+    elif isinstance(obj, (str, int, float, bool)):
+        return obj
+    elif isinstance(obj, dict):
+        return {k: convert_to_dict(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [convert_to_dict(item) for item in obj]
+    elif hasattr(obj, "__dict__"):
+        return {k: convert_to_dict(v) for k, v in obj.__dict__.items()}
+    else:
+        return str(obj)
+
+
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def initiate_payment(request):
@@ -189,22 +207,9 @@ def check_payment_status(request):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        # Prepare payment details for response/storage
-        payment_details_list = []
-        for pd in phonepe_response.get("payment_details", []):
-            if hasattr(pd, "__dict__"):
-                payment_details_list.append(pd.__dict__)
-            else:
-                payment_details_list.append(pd)
-
-        # Prepare meta info for storage
-        meta_info_dict = {}
-        meta_info = phonepe_response.get("meta_info")
-        if meta_info:
-            if hasattr(meta_info, "__dict__"):
-                meta_info_dict = meta_info.__dict__
-            else:
-                meta_info_dict = meta_info
+        # Convert all PhonePe objects to dictionaries recursively
+        payment_details_list = convert_to_dict(phonepe_response.get("payment_details", []))
+        meta_info_dict = convert_to_dict(phonepe_response.get("meta_info"))
 
         # Update payment status
         with transaction.atomic():
@@ -214,11 +219,12 @@ def check_payment_status(request):
                 payment.status = "completed"
 
                 # Extract payment details
-                if payment_details_list:
+                if payment_details_list and isinstance(payment_details_list, list) and len(payment_details_list) > 0:
                     latest_payment = payment_details_list[0]
-                    payment.phonepe_transaction_id = latest_payment.get("transaction_id", "")
-                    payment.payment_mode = latest_payment.get("payment_mode", "")
-                    payment.instrument_type = latest_payment.get("instrument_type", "")
+                    if isinstance(latest_payment, dict):
+                        payment.phonepe_transaction_id = latest_payment.get("transaction_id", "")
+                        payment.payment_mode = latest_payment.get("payment_mode", "")
+                        payment.instrument_type = latest_payment.get("instrument_type", "")
 
                 # Update related objects based on payment type
                 if payment.payment_type in ["tournament_plan", "scrim_plan"] and payment.tournament:
@@ -384,7 +390,7 @@ def phonepe_callback(request):
         return JsonResponse({"error": "Method not allowed"}, status=405)
 
     try:
-        # Get callback data
+        # Get authorization header and body
         authorization_header = request.headers.get("Authorization", "")
         callback_body = request.body.decode("utf-8")
 
@@ -396,29 +402,24 @@ def phonepe_callback(request):
             logger.warning("PhonePe callback credentials not configured")
             return JsonResponse({"error": "Callback not configured"}, status=500)
 
-        # Validate callback
-        validation_response = phonepe_service.validate_callback(
-            username=callback_username,
-            password=callback_password,
-            authorization_header=authorization_header,
-            callback_response_body=callback_body,
-        )
+        # Manually validate Authorization header (SHA256 of username:password)
+        import hashlib
 
-        if not validation_response.get("success"):
-            logger.error(f"Callback validation failed: {validation_response.get('error')}")
-            return JsonResponse({"error": "Invalid callback"}, status=400)
+        expected_auth = hashlib.sha256(f"{callback_username}:{callback_password}".encode()).hexdigest()
 
-        callback_type = validation_response.get("callback_type")
-        callback_data = validation_response.get("callback_data")
+        if authorization_header != expected_auth:
+            logger.error(f"Callback authorization failed. Expected: {expected_auth}, Got: {authorization_header}")
+            return JsonResponse({"error": "Unauthorized"}, status=401)
 
-        logger.info(f"Received PhonePe callback: Type={callback_type}")
+        # Parse JSON body directly
+        callback_data = json.loads(callback_body)
+        event_type = callback_data.get("event", "")
+        payload = callback_data.get("payload", {})
+
+        logger.info(f"Received PhonePe callback: Type={event_type}")
 
         # Handle different callback types
         with transaction.atomic():
-            # callback_data is now a dict with 'event' and 'payload' keys
-            event_type = callback_data.get("event", "")
-            payload = callback_data.get("payload", {})
-
             if event_type in ["checkout.order.completed", "checkout.order.failed"]:
                 # Payment callback
                 merchant_order_id = payload.get("merchantOrderId", "")
