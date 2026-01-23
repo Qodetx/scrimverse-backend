@@ -189,6 +189,23 @@ def check_payment_status(request):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        # Prepare payment details for response/storage
+        payment_details_list = []
+        for pd in phonepe_response.get("payment_details", []):
+            if hasattr(pd, "__dict__"):
+                payment_details_list.append(pd.__dict__)
+            else:
+                payment_details_list.append(pd)
+
+        # Prepare meta info for storage
+        meta_info_dict = {}
+        meta_info = phonepe_response.get("meta_info")
+        if meta_info:
+            if hasattr(meta_info, "__dict__"):
+                meta_info_dict = meta_info.__dict__
+            else:
+                meta_info_dict = meta_info
+
         # Update payment status
         with transaction.atomic():
             payment_state = phonepe_response.get("state")
@@ -197,12 +214,11 @@ def check_payment_status(request):
                 payment.status = "completed"
 
                 # Extract payment details
-                payment_details = phonepe_response.get("payment_details", [])
-                if payment_details:
-                    latest_payment = payment_details[0]
-                    payment.phonepe_transaction_id = getattr(latest_payment, "transaction_id", "")
-                    payment.payment_mode = getattr(latest_payment, "payment_mode", "")
-                    payment.instrument_type = getattr(latest_payment, "instrument_type", "")
+                if payment_details_list:
+                    latest_payment = payment_details_list[0]
+                    payment.phonepe_transaction_id = latest_payment.get("transaction_id", "")
+                    payment.payment_mode = latest_payment.get("payment_mode", "")
+                    payment.instrument_type = latest_payment.get("instrument_type", "")
 
                 # Update related objects based on payment type
                 if payment.payment_type in ["tournament_plan", "scrim_plan"] and payment.tournament:
@@ -220,7 +236,17 @@ def check_payment_status(request):
                 payment.error_code = phonepe_response.get("error_code", "")
                 payment.detailed_error_code = phonepe_response.get("detailed_error_code", "")
 
-            payment.callback_data = phonepe_response
+            # Store clean data
+            payment.callback_data = {
+                "order_id": phonepe_response.get("order_id"),
+                "state": payment_state,
+                "amount": phonepe_response.get("amount"),
+                "expire_at": phonepe_response.get("expire_at"),
+                "meta_info": meta_info_dict,
+                "error_code": phonepe_response.get("error_code"),
+                "detailed_error_code": phonepe_response.get("detailed_error_code"),
+                "payment_details": payment_details_list,
+            }
             payment.save()
 
         logger.info(f"Payment status checked: {merchant_order_id} - Status: {payment.status}")
@@ -233,7 +259,7 @@ def check_payment_status(request):
                 "amount": str(payment.amount),
                 "payment_type": payment.payment_type,
                 "phonepe_state": payment_state,
-                "payment_details": phonepe_response.get("payment_details"),
+                "payment_details": payment_details_list,
             },
             status=status.HTTP_200_OK,
         )
@@ -389,14 +415,18 @@ def phonepe_callback(request):
 
         # Handle different callback types
         with transaction.atomic():
-            if callback_type in ["CHECKOUT_ORDER_COMPLETED", "CHECKOUT_ORDER_FAILED"]:
+            # callback_data is now a dict with 'event' and 'payload' keys
+            event_type = callback_data.get("event", "")
+            payload = callback_data.get("payload", {})
+
+            if event_type in ["checkout.order.completed", "checkout.order.failed"]:
                 # Payment callback
-                merchant_order_id = callback_data.original_merchant_order_id
+                merchant_order_id = payload.get("merchantOrderId", "")
 
                 try:
                     payment = Payment.objects.get(merchant_order_id=merchant_order_id)
 
-                    if callback_type == "CHECKOUT_ORDER_COMPLETED":
+                    if event_type == "checkout.order.completed":
                         payment.status = "completed"
 
                         # Update related objects
@@ -412,11 +442,14 @@ def phonepe_callback(request):
 
                     else:  # FAILED
                         payment.status = "failed"
-                        payment.error_code = getattr(callback_data, "error_code", "")
-                        payment.detailed_error_code = getattr(callback_data, "detailed_error_code", "")
+                        payment.error_code = payload.get("errorCode", "")
+                        payment.detailed_error_code = payload.get("detailedErrorCode", "")
 
-                    payment.phonepe_order_id = callback_data.order_id
-                    payment.callback_data = callback_data.__dict__ if hasattr(callback_data, "__dict__") else {}
+                    payment.phonepe_order_id = payload.get("orderId", "")
+
+                    # callback_data is already a dict
+                    payment.callback_data = callback_data
+
                     payment.save()
 
                     logger.info(f"Payment updated from callback: {merchant_order_id} - Status: {payment.status}")
@@ -424,24 +457,27 @@ def phonepe_callback(request):
                 except Payment.DoesNotExist:
                     logger.error(f"Payment not found for callback: {merchant_order_id}")
 
-            elif callback_type in ["PG_REFUND_COMPLETED", "PG_REFUND_FAILED", "PG_REFUND_ACCEPTED"]:
+            elif event_type in ["pg.refund.completed", "pg.refund.failed", "pg.refund.accepted"]:
                 # Refund callback
-                merchant_refund_id = callback_data.merchant_refund_id
+                merchant_refund_id = payload.get("merchantRefundId", "")
 
                 try:
                     refund = Refund.objects.get(merchant_refund_id=merchant_refund_id)
 
-                    if callback_type == "PG_REFUND_COMPLETED":
+                    if event_type == "pg.refund.completed":
                         refund.status = "completed"
-                    elif callback_type == "PG_REFUND_FAILED":
+                    elif event_type == "pg.refund.failed":
                         refund.status = "failed"
-                        refund.error_code = getattr(callback_data, "error_code", "")
-                        refund.detailed_error_code = getattr(callback_data, "detailed_error_code", "")
-                    elif callback_type == "PG_REFUND_ACCEPTED":
+                        refund.error_code = payload.get("errorCode", "")
+                        refund.detailed_error_code = payload.get("detailedErrorCode", "")
+                    elif event_type == "pg.refund.accepted":
                         refund.status = "accepted"
 
-                    refund.phonepe_refund_id = callback_data.refund_id
-                    refund.callback_data = callback_data.__dict__ if hasattr(callback_data, "__dict__") else {}
+                    refund.phonepe_refund_id = payload.get("refundId", "")
+
+                    # callback_data is already a dict
+                    refund.callback_data = callback_data
+
                     refund.save()
 
                     logger.info(f"Refund updated from callback: {merchant_refund_id} - Status: {refund.status}")

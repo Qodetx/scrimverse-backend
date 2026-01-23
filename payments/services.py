@@ -361,12 +361,23 @@ class PhonePeService:
                 callback_response_data=callback_response_body,
             )
 
-            logger.info(f"Callback validated: Type={response.callback_type}")
+            # Extract callback data - it's an object, convert to dict
+            callback_data_dict = {}
+            if hasattr(response, "callback_data") and response.callback_data:
+                if hasattr(response.callback_data, "__dict__"):
+                    callback_data_dict = response.callback_data.__dict__
+                else:
+                    callback_data_dict = response.callback_data
+
+            # Extract event type from callback data
+            callback_type = callback_data_dict.get("event", "UNKNOWN")
+
+            logger.info(f"Callback validated: Type={callback_type}")
 
             return {
                 "success": True,
-                "callback_type": response.callback_type,
-                "callback_data": response.callback_data,
+                "callback_type": callback_type,
+                "callback_data": callback_data_dict,
             }
 
         except PhonePeException as e:
