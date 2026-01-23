@@ -81,7 +81,7 @@ class Payment(models.Model):
         super().save(*args, **kwargs)
 
     class Meta:
-        db_table = "payments"
+        db_table = "payments_payment"
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["merchant_order_id"]),
@@ -143,7 +143,7 @@ class Refund(models.Model):
         super().save(*args, **kwargs)
 
     class Meta:
-        db_table = "refunds"
+        db_table = "payments_refund"
         ordering = ["-created_at"]
         indexes = [
             models.Index(fields=["merchant_refund_id"]),

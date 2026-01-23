@@ -810,13 +810,21 @@ class TeamJoinRequestAdmin(admin.ModelAdmin):
 
     def player_display(self, obj):
         """Display player with link"""
-        if not obj.player or not obj.player.user:
-            return "N/A"
-        return format_html(
-            '<a href="/admin/accounts/playerprofile/{}/change/">{}</a>',
-            obj.player.id,
-            obj.player.user.username,
-        )
+        try:
+            if not obj.player:
+                return "N/A"
+
+            # Check if player has user attribute, if not it might be a user itself
+            user = getattr(obj.player, "user", obj.player)
+            username = getattr(user, "username", "Unknown")
+
+            return format_html(
+                '<a href="/admin/accounts/playerprofile/{}/change/">{}</a>',
+                obj.player.id if hasattr(obj.player, "id") else 0,
+                username,
+            )
+        except Exception:
+            return "Error Loading User"
 
     player_display.short_description = "Player"
 
