@@ -18,6 +18,7 @@ class TournamentAdmin(admin.ModelAdmin):
         "host",
         "tournament_start",
         "plan_type",
+        "plan_payment_status",
     ]
 
     list_filter = [
@@ -38,6 +39,7 @@ class TournamentAdmin(admin.ModelAdmin):
         "host__user__username",
         "host__user__email",
         "game_name",
+        "plan_payment_id",
     ]
 
     readonly_fields = [
@@ -81,6 +83,7 @@ class TournamentAdmin(admin.ModelAdmin):
                     "revenue_display",
                     "plan_type",
                     "plan_payment_status",
+                    "plan_payment_id",
                 )
             },
         ),
@@ -383,6 +386,7 @@ class TournamentRegistrationAdmin(admin.ModelAdmin):
         "player_count",
         "status_badge",
         "payment_badge",
+        "payment_id",
         "registered_at",
     ]
 
@@ -401,6 +405,7 @@ class TournamentRegistrationAdmin(admin.ModelAdmin):
         "player__user__email",
         "tournament__title",
         "team__name",
+        "payment_id",
     ]
 
     readonly_fields = ["registered_at", "player_count", "team_members_display"]

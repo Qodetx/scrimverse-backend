@@ -15,6 +15,7 @@ class PaymentAdmin(admin.ModelAdmin):
         "status",
         "payment_mode",
         "created_at",
+        "metadata_preview",
     ]
     list_filter = ["payment_type", "status", "payment_mode", "created_at"]
     search_fields = [
@@ -31,6 +32,7 @@ class PaymentAdmin(admin.ModelAdmin):
         "amount_paisa",
         "redirect_url",
         "callback_data",
+        "meta_info_pretty",
         "created_at",
         "updated_at",
         "completed_at",
@@ -90,10 +92,10 @@ class PaymentAdmin(admin.ModelAdmin):
             },
         ),
         (
-            "Metadata",
+            "Metadata (JSON Storage)",
             {
                 "fields": (
-                    "meta_info",
+                    "meta_info_pretty",
                     "created_at",
                     "updated_at",
                     "completed_at",
@@ -102,6 +104,36 @@ class PaymentAdmin(admin.ModelAdmin):
         ),
     )
     ordering = ["-created_at"]
+
+    def meta_info_pretty(self, obj):
+        """Display meta_info in a readable JSON format"""
+        import json
+
+        from django.utils.html import format_html
+
+        from pygments import highlight
+        from pygments.formatters import HtmlFormatter
+        from pygments.lexers import JsonLexer
+
+        # Format JSON with indent
+        response = json.dumps(obj.meta_info, indent=2)
+
+        # Syntax highlight
+        formatter = HtmlFormatter(style="monokai")
+        response = highlight(response, JsonLexer(), formatter)
+        style = "<style>" + formatter.get_style_defs() + "</style>"
+
+        return format_html(style + response)
+
+    meta_info_pretty.short_description = "Formatted Meta Info"
+
+    def metadata_preview(self, obj):
+        """Show a brief summary of metadata in the list view"""
+        if not obj.meta_info:
+            return "-"
+        return str(list(obj.meta_info.keys()))
+
+    metadata_preview.short_description = "Meta Keys"
 
 
 @admin.register(Refund)
