@@ -211,7 +211,12 @@ class TournamentCreateView(generics.CreateAPIView):
         from decimal import Decimal
 
         pending_tournament_data = {}
+        # Fields to exclude (we set these explicitly when creating the tournament)
+        excluded_fields = {"plan_payment_status", "plan_payment_id"}
+
         for key, value in validated_data.items():
+            if key in excluded_fields:
+                continue  # Skip fields we'll set explicitly
             if hasattr(value, "name"):  # File field
                 pending_tournament_data[key] = value.name
             elif hasattr(value, "id"):  # Foreign key

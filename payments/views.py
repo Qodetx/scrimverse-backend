@@ -266,6 +266,9 @@ def check_payment_status(request):
                                 tournament_data[field] = Decimal(str(tournament_data[field]))
 
                         if host_id:
+                            # Remove fields that we're setting explicitly to avoid duplicates
+                            tournament_data.pop("plan_payment_status", None)
+
                             host = HostProfile.objects.get(id=host_id)
                             tournament = Tournament.objects.create(
                                 host=host,
@@ -613,6 +616,10 @@ def phonepe_callback(request):
 
                                 if host_id:
                                     logger.info(f"Creating tournament with data: {list(tournament_data.keys())}")
+
+                                    # Remove fields that we're setting explicitly to avoid duplicates
+                                    tournament_data.pop("plan_payment_status", None)
+
                                     host = HostProfile.objects.get(id=host_id)
                                     tournament = Tournament.objects.create(
                                         host=host,
