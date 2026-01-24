@@ -126,6 +126,12 @@ class Tournament(models.Model):
     plan_price = models.DecimalField(max_digits=10, decimal_places=2, default=299.00, help_text="Plan price in INR")
     plan_payment_status = models.BooleanField(default=False, help_text="Whether plan payment is completed")
     plan_payment_id = models.CharField(max_length=100, blank=True, help_text="Payment transaction ID for plan")
+    is_payment_pending = models.BooleanField(
+        default=False, help_text="True if tournament is created but payment is pending"
+    )
+    payment_deadline = models.DateTimeField(
+        null=True, blank=True, help_text="Deadline for completing payment (12 hours from creation)"
+    )
 
     # Premium Features
     homepage_banner = models.BooleanField(
@@ -256,6 +262,12 @@ class TournamentRegistration(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="confirmed")
     payment_status = models.BooleanField(default=False)
     payment_id = models.CharField(max_length=100, blank=True)
+    is_payment_pending = models.BooleanField(
+        default=False, help_text="True if registration is created but payment is pending"
+    )
+    payment_deadline = models.DateTimeField(
+        null=True, blank=True, help_text="Deadline for completing payment (12 hours from registration)"
+    )
 
     # Metadata
     registered_at = models.DateTimeField(auto_now_add=True)

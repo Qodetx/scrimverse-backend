@@ -62,6 +62,14 @@ class Payment(models.Model):
 
     # Metadata
     meta_info = models.JSONField(default=dict, blank=True, help_text="Additional metadata (udf1-5)")
+    pending_data = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Temporary storage for tournament/registration data until payment is completed",
+    )
+    payment_expires_at = models.DateTimeField(
+        null=True, blank=True, help_text="Payment expiry time (12 hours from creation)"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     completed_at = models.DateTimeField(null=True, blank=True)

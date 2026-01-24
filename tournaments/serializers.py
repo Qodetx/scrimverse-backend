@@ -104,6 +104,9 @@ class TournamentSerializer(serializers.ModelSerializer):
 
         return attrs
 
+    # Note: Tournament creation is now handled in the payment flow
+    # The tournament is only created AFTER successful payment to avoid slot reservation issues
+
 
 class TournamentListSerializer(serializers.ModelSerializer):
     """Simplified serializer for list views"""
@@ -344,12 +347,22 @@ class TournamentRegistrationSerializer(serializers.ModelSerializer):
                 )
 
         # Create registration
+        from datetime import timedelta
+
+        from django.utils import timezone
+
+        # Determine if payment is required
+        requires_payment = tournament.entry_fee > 0
+
         registration = TournamentRegistration.objects.create(
             tournament=tournament,
             player=registering_player,
             team=team_instance,
             team_name=team_name,
             team_members=team_members_data,
+            is_payment_pending=requires_payment,
+            payment_deadline=timezone.now() + timedelta(hours=12) if requires_payment else None,
+            payment_status=False if requires_payment else True,  # If no fee, mark as paid
             **validated_data,
         )
 

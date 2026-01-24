@@ -26,9 +26,13 @@ app.conf.beat_schedule = {
         "task": "tournaments.tasks.update_tournament_statuses",
         "schedule": crontab(minute="*"),  # Run every minute
     },
+    "cleanup-unpaid-tournaments-registrations": {
+        "task": "tournaments.tasks.cleanup_unpaid_tournaments_and_registrations",
+        "schedule": crontab(minute=0),  # Run every hour at minute 0
+    },
     "update-platform-statistics": {
         "task": "tournaments.tasks.update_platform_statistics",
-        "schedule": crontab(minute=0),  # Run every hour at minute 0
+        "schedule": crontab(minute=5),  # Run every hour at minute 5
     },
     "refresh-host-dashboards": {
         "task": "tournaments.tasks.refresh_all_host_dashboards",

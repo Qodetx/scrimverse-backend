@@ -83,7 +83,8 @@ class TournamentListView(generics.ListAPIView):
         return super().list(request, *args, **kwargs)
 
     def get_queryset(self):
-        queryset = Tournament.objects.all()
+        # Exclude tournaments with pending payment from public view
+        queryset = Tournament.objects.filter(is_payment_pending=False)
         status_param = self.request.query_params.get("status", None)
         game = self.request.query_params.get("game", None)
         category = self.request.query_params.get("category", None)
@@ -147,9 +148,9 @@ class TournamentDetailView(generics.RetrieveAPIView):
 
 class TournamentCreateView(generics.CreateAPIView):
     """
-    Host creates a tournament
+    Host creates a tournament - initiates payment flow
     POST /api/tournaments/create/
-    Invalidates cache on creation
+    Returns payment redirect URL instead of creating tournament immediately
     """
 
     serializer_class = TournamentSerializer
@@ -157,7 +158,15 @@ class TournamentCreateView(generics.CreateAPIView):
     parser_classes = (parsers.MultiPartParser, parsers.FormParser, parsers.JSONParser)
 
     def create(self, request, *args, **kwargs):
-        """Override create to handle file uploads properly"""
+        """Validate tournament data and initiate payment"""
+        from datetime import timedelta
+        from uuid import uuid4
+
+        from decouple import config
+
+        from payments.models import Payment
+        from payments.services import phonepe_service
+
         logger.debug(
             f"Tournament creation request - Host: {request.user.id}, Event mode: {request.data.get('event_mode')}"
         )
@@ -169,40 +178,127 @@ class TournamentCreateView(generics.CreateAPIView):
         for file_field in ["banner_image", "tournament_file"]:
             if file_field in data:
                 value = data[file_field]
-                # Remove if it's an empty string or has no size
                 if value == "" or value == "null" or (isinstance(value, str) and not value):
                     data.pop(file_field)
                 elif hasattr(value, "size") and value.size == 0:
                     data.pop(file_field)
 
-        # Debug logging
-        print(f"[DEBUG] Received rounds data: {data.get('rounds')}")
-        print(f"[DEBUG] Received event_mode: {data.get('event_mode')}")
-
+        # Validate the data using serializer
         serializer = self.get_serializer(data=data)
         if not serializer.is_valid():
-            print(f"[DEBUG] Serializer validation errors: {serializer.errors}")
+            logger.error(f"[DEBUG] Serializer validation errors: {serializer.errors}")
             return Response(serializer.errors, status=400)
 
-        self.perform_create(serializer)
-        headers = self.get_success_headers(serializer.data)
-        return Response(serializer.data, status=201, headers=headers)
+        # Get validated data but DON'T create tournament yet
+        validated_data = serializer.validated_data
+        plan_type = validated_data.get("plan_type", "basic")
+        event_mode = validated_data.get("event_mode", "TOURNAMENT")
 
-    def perform_create(self, serializer):
-        host_profile = HostProfile.objects.get(user=self.request.user)
-        tournament = serializer.save(host=host_profile)
+        # Determine payment amount based on plan
+        plan_prices = {"basic": 299.00, "featured": 499.00, "premium": 799.00}
+        amount = plan_prices.get(plan_type, 299.00)
 
-        logger.info(
-            f"Tournament created - ID: {tournament.id}, Title: {tournament.title}, Host: {host_profile.id}, Mode: {tournament.event_mode}"  # noqa E501
-        )
+        # Generate unique merchant order ID
+        merchant_order_id = f"ORD_{uuid4().hex[:16].upper()}"
 
-        # Invalidate caches so next request gets fresh data
-        cache.delete("tournaments:list:all")
-        cache.delete(f"host:dashboard:{host_profile.id}")  # Host dashboard
-        cache.delete("platform:statistics")  # Platform stats
+        # Convert amount to paisa
+        amount_paisa = int(amount * 100)
 
-        # Trigger immediate cache refresh for this host
-        update_host_dashboard_stats.delay(host_profile.id)
+        # Prepare redirect URL
+        frontend_url = config("CORS_ALLOWED_ORIGINS", default="http://localhost:3000").split(",")[0]
+        redirect_url = f"{frontend_url}/host/dashboard?payment_status=check&order_id={merchant_order_id}"
+
+        # Store tournament data as JSON (serialize files as paths if they exist)
+        from datetime import date, datetime, time
+        from decimal import Decimal
+
+        pending_tournament_data = {}
+        for key, value in validated_data.items():
+            if hasattr(value, "name"):  # File field
+                pending_tournament_data[key] = value.name
+            elif hasattr(value, "id"):  # Foreign key
+                pending_tournament_data[key] = value.id
+            elif isinstance(value, Decimal):
+                pending_tournament_data[key] = float(value)
+            elif isinstance(value, (datetime, date)):
+                pending_tournament_data[key] = value.isoformat()
+            elif isinstance(value, time):
+                pending_tournament_data[key] = value.isoformat()
+            else:
+                pending_tournament_data[key] = value
+
+        # Add host ID
+        pending_tournament_data["host_id"] = request.user.host_profile.id
+
+        # Prepare metadata
+        payment_type = "scrim_plan" if event_mode == "SCRIM" else "tournament_plan"
+        meta_info = {
+            "udf1": str(request.user.id),
+            "udf2": payment_type,
+            "udf3": "",  # No tournament ID yet
+            "udf4": "",
+            "udf5": merchant_order_id,
+        }
+
+        # Create payment record with pending data
+        try:
+            payment = Payment.objects.create(
+                merchant_order_id=merchant_order_id,
+                payment_type=payment_type,
+                amount=amount,
+                amount_paisa=amount_paisa,
+                user=request.user,
+                host_profile=request.user.host_profile,
+                status="pending",
+                meta_info=meta_info,
+                pending_data=pending_tournament_data,
+                payment_expires_at=timezone.now() + timedelta(hours=12),
+            )
+
+            # Initiate payment with PhonePe
+            phonepe_response = phonepe_service.initiate_payment(
+                amount=amount_paisa,
+                redirect_url=redirect_url,
+                merchant_order_id=merchant_order_id,
+                meta_info_dict=meta_info,
+                message=f"Payment for {validated_data.get('title', 'Tournament')} - {plan_type.title()} Plan",
+                expire_after=43200,  # 12 hours
+                disable_payment_retry=False,
+            )
+
+            if not phonepe_response.get("success"):
+                payment.status = "failed"
+                payment.error_code = phonepe_response.get("error_code", "")
+                payment.save()
+
+                return Response(
+                    {"error": "Failed to initiate payment", "details": phonepe_response.get("error")},
+                    status=500,
+                )
+
+            # Update payment with PhonePe response
+            payment.phonepe_order_id = phonepe_response.get("order_id")
+            payment.redirect_url = phonepe_response.get("redirect_url")
+            payment.save()
+
+            logger.info(f"Payment initiated for tournament creation: {merchant_order_id}")
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Please complete payment to create tournament",
+                    "merchant_order_id": merchant_order_id,
+                    "phonepe_order_id": phonepe_response.get("order_id"),
+                    "redirect_url": phonepe_response.get("redirect_url"),
+                    "amount": amount,
+                    "plan_type": plan_type,
+                },
+                status=200,
+            )
+
+        except Exception as e:
+            logger.error(f"Error initiating tournament payment: {str(e)}")
+            return Response({"error": "Internal server error"}, status=500)
 
 
 class TournamentUpdateView(generics.UpdateAPIView):
@@ -286,6 +382,14 @@ class TournamentRegistrationCreateView(generics.CreateAPIView):
         return context
 
     def perform_create(self, serializer):
+        from datetime import timedelta
+        from uuid import uuid4
+
+        from decouple import config
+
+        from payments.models import Payment
+        from payments.services import phonepe_service
+
         logger.debug(
             f"Tournament registration request - Player: {self.request.user.id}, Tournament: {self.kwargs['tournament_id']}"  # noqa E501
         )
@@ -313,8 +417,10 @@ class TournamentRegistrationCreateView(generics.CreateAPIView):
                 }
             )
 
-        # Check if tournament is full
-        if tournament.current_participants >= tournament.max_participants:
+        # Check if tournament is full (only count confirmed registrations, not pending payments)
+        confirmed_count = TournamentRegistration.objects.filter(tournament=tournament, is_payment_pending=False).count()
+
+        if confirmed_count >= tournament.max_participants:
             raise ValidationError({"error": "Tournament is full"})
 
         # Get player_usernames from validated data
@@ -328,21 +434,18 @@ class TournamentRegistrationCreateView(generics.CreateAPIView):
                 raise ValidationError({"player_usernames": "You must include your own username in the team"})
 
         # Check if any team member is already registered (check by player profile IDs)
-        # Get all player profiles for the team
         team_users = User.objects.filter(username__in=player_usernames, user_type="player").select_related(
             "player_profile"
         )
         team_player_ids = {user.player_profile.id for user in team_users if hasattr(user, "player_profile")}
 
-        # Check existing registrations
-        existing_registrations = TournamentRegistration.objects.filter(tournament=tournament)
+        # Check existing registrations (only confirmed ones)
+        existing_registrations = TournamentRegistration.objects.filter(tournament=tournament, is_payment_pending=False)
         for registration in existing_registrations:
             if registration.team_members:
                 registered_player_ids = {member.get("id") for member in registration.team_members if member.get("id")}
-                # Check if any overlap
                 overlapping_ids = team_player_ids & registered_player_ids
                 if overlapping_ids:
-                    # Find usernames of overlapping players
                     registered_usernames = [
                         member.get("username")
                         for member in registration.team_members
@@ -355,22 +458,130 @@ class TournamentRegistrationCreateView(generics.CreateAPIView):
                         }
                     )
 
-        # Save registration (serializer will handle team_members creation)
-        registration = serializer.save(player_id=player_profile.id, tournament_id=tournament_id)
+        # Check if entry fee is required
+        if tournament.entry_fee > 0:
+            # PAYMENT FLOW - Don't create registration yet
 
-        logger.info(
-            f"Registration created - ID: {registration.id}, Player: {player_profile.user.username}, Tournament: {tournament.title}, Team: {registration.team_name}"  # noqa E501
-        )
+            # Prepare registration data to store in pending_data
+            pending_reg_data = {
+                "tournament_id": tournament_id,
+                "player_id": player_profile.id,
+                "team_id": team_id,
+                "player_usernames": player_usernames,
+                "team_name": serializer.validated_data.get("team_name", ""),
+                "save_as_team": serializer.validated_data.get("save_as_team", False),
+            }
 
-        # Update participant count (count teams, not individual players)
-        tournament.current_participants += 1
-        tournament.save()
+            # Add any other validated data
+            for key, value in serializer.validated_data.items():
+                if key not in [
+                    "player_usernames",
+                    "team_name",
+                    "team_id",
+                    "save_as_team",
+                    "tournament_id",
+                    "player_id",
+                ]:
+                    if hasattr(value, "id"):
+                        pending_reg_data[key] = value.id
+                    else:
+                        pending_reg_data[key] = value
 
-        # Invalidate caches since participant count changed
-        cache.delete("tournaments:list:all")
-        cache.delete(f"host:dashboard:{tournament.host.id}")  # Host dashboard
+            # Generate unique merchant order ID
+            merchant_order_id = f"ORD_{uuid4().hex[:16].upper()}"
+            amount = tournament.entry_fee
+            amount_paisa = int(amount * 100)
 
-        update_host_dashboard_stats.delay(tournament.host.id)
+            # Prepare redirect URL
+            frontend_url = config("CORS_ALLOWED_ORIGINS", default="http://localhost:3000").split(",")[0]
+            redirect_url = f"{frontend_url}/player/dashboard?payment_status=check&order_id={merchant_order_id}"
+
+            # Prepare metadata
+            meta_info = {
+                "udf1": str(self.request.user.id),
+                "udf2": "entry_fee",
+                "udf3": str(tournament_id),
+                "udf4": "",
+                "udf5": merchant_order_id,
+            }
+
+            try:
+                # Create payment record with pending data
+                payment = Payment.objects.create(
+                    merchant_order_id=merchant_order_id,
+                    payment_type="entry_fee",
+                    amount=amount,
+                    amount_paisa=amount_paisa,
+                    user=self.request.user,
+                    player_profile=player_profile,
+                    status="pending",
+                    meta_info=meta_info,
+                    pending_data=pending_reg_data,
+                    payment_expires_at=timezone.now() + timedelta(hours=12),
+                )
+
+                # Initiate payment with PhonePe
+                phonepe_response = phonepe_service.initiate_payment(
+                    amount=amount_paisa,
+                    redirect_url=redirect_url,
+                    merchant_order_id=merchant_order_id,
+                    meta_info_dict=meta_info,
+                    message=f"Entry fee for {tournament.title}",
+                    expire_after=43200,  # 12 hours
+                    disable_payment_retry=False,
+                )
+
+                if not phonepe_response.get("success"):
+                    payment.status = "failed"
+                    payment.error_code = phonepe_response.get("error_code", "")
+                    payment.save()
+
+                    raise ValidationError(
+                        {"error": "Failed to initiate payment", "details": phonepe_response.get("error")}
+                    )
+
+                # Update payment with PhonePe response
+                payment.phonepe_order_id = phonepe_response.get("order_id")
+                payment.redirect_url = phonepe_response.get("redirect_url")
+                payment.save()
+
+                logger.info(f"Payment initiated for registration: {merchant_order_id}")
+
+                # Return payment info instead of registration
+                # This will be caught by the view and returned as response
+                raise ValidationError(
+                    {
+                        "payment_required": True,
+                        "merchant_order_id": merchant_order_id,
+                        "redirect_url": phonepe_response.get("redirect_url"),
+                        "amount": float(amount),
+                        "message": "Please complete payment to register",
+                    }
+                )
+
+            except ValidationError:
+                raise
+            except Exception as e:
+                logger.error(f"Error initiating registration payment: {str(e)}")
+                raise ValidationError({"error": "Internal server error"})
+
+        else:
+            # NO PAYMENT REQUIRED - Create registration directly
+            registration = serializer.save(player_id=player_profile.id, tournament_id=tournament_id)
+
+            logger.info(
+                f"Registration created - ID: {registration.id}, Player: {player_profile.user.username}, Tournament: {tournament.title}, Team: {registration.team_name}"  # noqa E501
+            )
+
+            # Update participant count
+            tournament.current_participants += 1
+            tournament.save()
+
+            # Invalidate caches
+            cache.delete("tournaments:list:all")
+            cache.delete(f"host:dashboard:{tournament.host.id}")
+
+            update_host_dashboard_stats.delay(tournament.host.id)
 
 
 class PlayerTournamentRegistrationsView(generics.ListAPIView):
@@ -386,8 +597,11 @@ class PlayerTournamentRegistrationsView(generics.ListAPIView):
         try:
             player_profile = PlayerProfile.objects.get(user=self.request.user)
             team_ids = TeamMember.objects.filter(user=self.request.user).values_list("team_id", flat=True)
+            # Exclude registrations with pending payment
             return (
-                TournamentRegistration.objects.filter(Q(player=player_profile) | Q(team_id__in=team_ids))
+                TournamentRegistration.objects.filter(
+                    Q(player=player_profile) | Q(team_id__in=team_ids), is_payment_pending=False
+                )
                 .distinct()
                 .order_by("-registered_at")
             )
