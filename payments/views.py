@@ -266,21 +266,31 @@ def check_payment_status(request):
                                 tournament_data[field] = Decimal(str(tournament_data[field]))
 
                         if host_id:
-                            # Remove fields that we're setting explicitly to avoid duplicates
-                            tournament_data.pop("plan_payment_status", None)
+                            # Check if tournament already exists (e.g. created by webhook)
+                            tournament = Tournament.objects.filter(plan_payment_id=merchant_order_id).first()
 
-                            host = HostProfile.objects.get(id=host_id)
-                            tournament = Tournament.objects.create(
-                                host=host,
-                                plan_payment_status=True,
-                                plan_payment_id=merchant_order_id,
-                                **tournament_data,
-                            )
+                            if not tournament:
+                                # Remove fields that we're setting explicitly to avoid duplicates
+                                tournament_data.pop("plan_payment_status", None)
+
+                                host = HostProfile.objects.get(id=host_id)
+                                tournament = Tournament.objects.create(
+                                    host=host,
+                                    plan_payment_status=True,
+                                    plan_payment_id=merchant_order_id,
+                                    **tournament_data,
+                                )
+                                logger.info(
+                                    f"Tournament created from payment check: {tournament.id} - {tournament.title}"
+                                )
+                            else:
+                                logger.info(f"Tournament already exists for payment check: {tournament.id}")
 
                             # Link payment to tournament
                             payment.tournament = tournament
 
-                            logger.info(f"Tournament created from payment: {tournament.id} - {tournament.title}")
+                            # Clear tournament_data from meta_info (no longer needed and contains Decimals)
+                            payment.meta_info.pop("tournament_data", None)
 
                             # Invalidate caches
                             cache.delete("tournaments:list:all")
@@ -332,36 +342,39 @@ def check_payment_status(request):
                                     }
                                 )
 
-                            # Create registration
-                            registration = TournamentRegistration.objects.create(
-                                tournament=tournament,
-                                player=player,
-                                team=team_instance,
-                                team_name=team_name,
-                                team_members=team_members_data,
-                                payment_status=True,
-                                payment_id=merchant_order_id,
-                                **reg_data,
-                            )
+                            # Check if registration already exists
+                            registration = TournamentRegistration.objects.filter(payment_id=merchant_order_id).first()
 
-                            # Update participant count
-                            tournament.current_participants += 1
-                            tournament.save()
+                            if not registration:
+                                # Create registration
+                                registration = TournamentRegistration.objects.create(
+                                    tournament=tournament,
+                                    player=player,
+                                    team=team_instance,
+                                    team_name=team_name,
+                                    team_members=team_members_data,
+                                    payment_status=True,
+                                    payment_id=merchant_order_id,
+                                    **reg_data,
+                                )
+                                # Update participant count
+                                tournament.current_participants += 1
+                                tournament.save()
+                                logger.info(f"Registration created from payment check: {registration.id}")
+                            else:
+                                logger.info(f"Registration already exists for payment check: {registration.id}")
 
                             # Link payment to registration
                             payment.registration = registration
 
                             logger.info(f"Registration created from payment: {registration.id}")
 
+                            # Clear registration_data from meta_info (no longer needed)
+                            payment.meta_info.pop("registration_data", None)
+
                             # Invalidate caches
                             cache.delete("tournaments:list:all")
                             cache.delete(f"host:dashboard:{tournament.host.id}")
-
-                        logger.info(f"Registration created from payment: {registration.id}")
-
-                        # Invalidate caches
-                        cache.delete("tournaments:list:all")
-                        cache.delete(f"host:dashboard:{tournament.host.id}")
 
             elif payment_state == "FAILED":
                 payment.status = "failed"
@@ -617,26 +630,33 @@ def phonepe_callback(request):
                                 if host_id:
                                     logger.info(f"Creating tournament with data: {list(tournament_data.keys())}")
 
-                                    # Remove fields that we're setting explicitly to avoid duplicates
-                                    tournament_data.pop("plan_payment_status", None)
+                                    # IDEMPOTENCY CHECK: Check if tournament already exists for this order
+                                    tournament = Tournament.objects.filter(plan_payment_id=merchant_order_id).first()
 
-                                    host = HostProfile.objects.get(id=host_id)
-                                    tournament = Tournament.objects.create(
-                                        host=host,
-                                        plan_payment_status=True,
-                                        plan_payment_id=merchant_order_id,
-                                        **tournament_data,
-                                    )
-                                    logger.info(
-                                        f"✅ Tournament created successfully: {tournament.id} - {tournament.title}"
-                                    )
+                                    if not tournament:
+                                        # Remove fields that we're setting explicitly to avoid duplicates
+                                        tournament_data.pop("plan_payment_status", None)
+
+                                        host = HostProfile.objects.get(id=host_id)
+                                        tournament = Tournament.objects.create(
+                                            host=host,
+                                            plan_payment_status=True,
+                                            plan_payment_id=merchant_order_id,
+                                            **tournament_data,
+                                        )
+                                        logger.info(
+                                            f"✅ Tournament created successfully: {tournament.id} - {tournament.title}"
+                                        )
+                                    else:
+                                        logger.info(f"Tournament already exists for order: {merchant_order_id}")
 
                                     # Link payment to tournament
                                     payment.tournament = tournament
 
-                                    logger.info(
-                                        f"Tournament created from webhook: {tournament.id} - {tournament.title}"
-                                    )
+                                    logger.info(f"Tournament linked from webhook: {tournament.id} - {tournament.title}")
+
+                                    # Clear tournament_data from meta_info (no longer needed and contains Decimals)
+                                    payment.meta_info.pop("tournament_data", None)
 
                                 # Invalidate caches
                                 cache.delete("tournaments:list:all")
@@ -689,25 +709,32 @@ def phonepe_callback(request):
                                     )
 
                                 # Create registration
-                                registration = TournamentRegistration.objects.create(
-                                    tournament=tournament,
-                                    player=player,
-                                    team=team_instance,
-                                    team_name=team_name,
-                                    team_members=team_members_data,
-                                    payment_status=True,
-                                    payment_id=merchant_order_id,
-                                    **reg_data,
-                                )
+                                # IDEMPOTENCY CHECK: Check if registration already exists
+                                registration = TournamentRegistration.objects.filter(
+                                    payment_id=merchant_order_id
+                                ).first()
 
-                                # Update participant count
-                                tournament.current_participants += 1
-                                tournament.save()
+                                if not registration:
+                                    registration = TournamentRegistration.objects.create(
+                                        tournament=tournament,
+                                        player=player,
+                                        team=team_instance,
+                                        team_name=team_name,
+                                        team_members=team_members_data,
+                                        payment_status=True,
+                                        payment_id=merchant_order_id,
+                                        **reg_data,
+                                    )
 
-                                # Link payment to registration
-                                payment.registration = registration
+                                    # Update participant count
+                                    tournament.current_participants += 1
+                                    tournament.save()
+                                    logger.info(f"Registration created from webhook: {registration.id}")
+                                else:
+                                    logger.info(f"Registration already exists for order: {merchant_order_id}")
 
-                                logger.info(f"Registration created from webhook: {registration.id}")
+                                # Clear registration_data from meta_info (no longer needed)
+                                payment.meta_info.pop("registration_data", None)
 
                                 # Invalidate caches
                                 cache.delete("tournaments:list:all")
