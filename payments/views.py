@@ -396,6 +396,9 @@ def check_payment_status(request):
 
         logger.info(f"Payment status checked: {merchant_order_id} - Status: {payment.status}")
 
+        # Ensure we have the latest links before returning
+        payment.refresh_from_db()
+
         return Response(
             {
                 "success": True,
@@ -403,6 +406,8 @@ def check_payment_status(request):
                 "status": payment.status,
                 "amount": str(payment.amount),
                 "payment_type": payment.payment_type,
+                "tournament_id": payment.tournament.id if payment.tournament else None,
+                "registration_id": payment.registration.id if payment.registration else None,
                 "phonepe_state": payment_state,
                 "payment_details": payment_details_list,
             },
