@@ -4,7 +4,7 @@ from django.core.cache import cache
 from django.db.models import Q, Sum
 from django.utils import timezone
 
-from rest_framework import generics, parsers, permissions
+from rest_framework import generics, parsers, permissions, status
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -383,6 +383,23 @@ class TournamentRegistrationCreateView(generics.CreateAPIView):
         context = super().get_serializer_context()
         context["tournament_id"] = self.kwargs["tournament_id"]
         return context
+
+    def create(self, request, *args, **kwargs):
+        """Override create to handle payment-required response status"""
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            self.perform_create(serializer)
+        except ValidationError as e:
+            # If it's a payment_required "error", return it as a 200 response
+            if isinstance(e.detail, dict) and e.detail.get("payment_required"):
+                return Response(e.detail, status=status.HTTP_200_OK)
+            # Re-raise other validation errors
+            raise
+
+        headers = self.get_success_headers(serializer.data)
+        return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     def perform_create(self, serializer):
         from uuid import uuid4
