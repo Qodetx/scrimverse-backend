@@ -1,0 +1,35 @@
+{% extends "emails/base.html" %}
+
+{% block title %}Premium Tournament - Special Offer{% endblock %}
+
+{% block content %}
+<h2>Exclusive Premium Tournament! 💎</h2>
+
+<p>Hi {{ user_name }},</p>
+
+<p>We have an exciting premium tournament that you won't want to miss!</p>
+
+<div class="info-box">
+    <p><strong>Tournament:</strong> {{ tournament_name }}</p>
+    <p><strong>Game:</strong> {{ game_name }}</p>
+    <p><strong>Prize Pool:</strong> {{ prize_pool }}</p>
+    <p><strong>Registration Deadline:</strong> {{ registration_deadline }}</p>
+    <p><strong>Start Date:</strong> {{ start_date }}</p>
+</div>
+
+<p>This premium tournament features:</p>
+<ul style="margin: 15px 0; padding-left: 20px;">
+    <li>Bigger prize pools</li>
+    <li>Professional streaming</li>
+    <li>Enhanced competition</li>
+    <li>Exclusive rewards</li>
+</ul>
+
+<a href="{{ tournament_url }}" class="button">Register Now</a>
+
+<div class="divider"></div>
+
+<p style="font-size: 14px; color: #6c757d;">
+    Limited slots available! Register early to secure your spot.
+</p>
+{% endblock %}

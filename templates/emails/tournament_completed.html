@@ -1,0 +1,40 @@
+{% extends "emails/base.html" %}
+
+{% block title %}Tournament Completed Summary{% endblock %}
+
+{% block content %}
+<h2>Tournament Completed! 🏆</h2>
+
+<p>Hi {{ host_name }},</p>
+
+<p>Your tournament <strong>{{ tournament_name }}</strong> has been successfully completed!</p>
+
+<div class="info-box">
+    <p><strong>Tournament:</strong> {{ tournament_name }}</p>
+    <p><strong>Completed on:</strong> {{ completed_at }}</p>
+    <p><strong>Total Participants:</strong> {{ total_participants }}</p>
+    <p><strong>Total Matches:</strong> {{ total_matches }}</p>
+</div>
+
+<p><strong>Tournament Statistics:</strong></p>
+<ul style="margin: 15px 0; padding-left: 20px;">
+    <li>Winner: {{ winner_name }}</li>
+    <li>Runner-up: {{ runner_up_name }}</li>
+    <li>Total Registrations: {{ total_registrations }}</li>
+    <li>Results Published: {% if results_published %}Yes{% else %}Pending{% endif %}</li>
+</ul>
+
+{% if not results_published %}
+<p style="color: #dc3545; font-weight: 600;">
+    ⚠️ Don't forget to publish the final results!
+</p>
+{% endif %}
+
+<a href="{{ tournament_manage_url }}" class="button">View Tournament Summary</a>
+
+<div class="divider"></div>
+
+<p style="font-size: 14px; color: #6c757d;">
+    Thank you for hosting on Scrimverse! We hope to see more tournaments from you.
+</p>
+{% endblock %}

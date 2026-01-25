@@ -55,7 +55,7 @@ ROOT_URLCONF = "scrimverse.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        "DIRS": [BASE_DIR / "templates"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -334,3 +334,22 @@ LOGGING = {
         "level": "INFO",
     },
 }
+
+# ==================== EMAIL CONFIGURATION ====================
+
+# Email Backend Configuration (AWS SES)
+EMAIL_BACKEND = config("EMAIL_BACKEND", default="django.core.mail.backends.console.EmailBackend")
+EMAIL_HOST = config("EMAIL_HOST", default="email-smtp.ap-south-2.amazonaws.com")
+EMAIL_PORT = config("EMAIL_PORT", default=587, cast=int)
+EMAIL_USE_TLS = config("EMAIL_USE_TLS", default=True, cast=bool)
+EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="")
+EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
+
+# Email Addresses
+DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="noreply@scrimverse.com")
+SUPPORT_EMAIL = config("SUPPORT_EMAIL", default="support@scrimverse.com")
+ADMIN_EMAIL = config("ADMIN_EMAIL", default="admin@scrimverse.com")
+
+# Email Settings
+EMAIL_TIMEOUT = 10  # seconds
+EMAIL_USE_LOCALTIME = True

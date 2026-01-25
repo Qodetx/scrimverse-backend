@@ -21,9 +21,10 @@ class UserSerializer(serializers.ModelSerializer):
             "profile_picture",
             "username_change_count",
             "last_username_change",
+            "is_email_verified",
             "created_at",
         )
-        read_only_fields = ("id", "username_change_count", "last_username_change", "created_at")
+        read_only_fields = ("id", "username_change_count", "last_username_change", "is_email_verified", "created_at")
 
 
 class PlayerProfileSerializer(serializers.ModelSerializer):

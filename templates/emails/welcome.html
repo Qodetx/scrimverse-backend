@@ -1,0 +1,45 @@
+{% extends "emails/base.html" %}
+
+{% block title %}Welcome to Scrimverse!{% endblock %}
+
+{% block content %}
+<h2>Welcome to Scrimverse, {{ user_name }}! 🎉</h2>
+
+<p>Thank you for joining the ultimate esports tournament platform! We're thrilled to have you as part of our gaming community.</p>
+
+{% if user_type == 'player' %}
+<p>Your <strong>Player Account</strong> has been successfully created and you're all set to:</p>
+
+<div class="info-box">
+    <p>✅ Join exciting tournaments</p>
+    <p>✅ Compete with players worldwide</p>
+    <p>✅ Track your performance</p>
+    <p>✅ Win amazing prizes</p>
+</div>
+
+<p>Get started by exploring tournaments and finding your next challenge!</p>
+
+{% elif user_type == 'host' %}
+<p>Your <strong>Host Account</strong> has been successfully created!</p>
+
+<div class="info-box">
+    <p>✅ Create and manage tournaments</p>
+    <p>✅ Build your gaming community</p>
+    <p>✅ Track registrations and results</p>
+    <p>✅ Access advanced analytics</p>
+</div>
+
+<p><strong>Next Step:</strong> Complete your host verification to start creating tournaments!</p>
+
+{% else %}
+<p>Your account has been successfully created and you're all set to explore Scrimverse!</p>
+{% endif %}
+
+<a href="{{ dashboard_url }}" class="button">Go to Dashboard</a>
+
+<div class="divider"></div>
+
+<p style="font-size: 14px; color: #6c757d;">
+    Need help getting started? Check out our <a href="{{ help_url }}" style="color: #667eea;">Getting Started Guide</a> or contact our support team.
+</p>
+{% endblock %}

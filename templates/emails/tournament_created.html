@@ -1,0 +1,30 @@
+{% extends "emails/base.html" %}
+
+{% block title %}Tournament Created Successfully{% endblock %}
+
+{% block content %}
+<h2>Tournament Created Successfully! 🎮</h2>
+
+<p>Hi {{ host_name }},</p>
+
+<p>Your tournament <strong>{{ tournament_name }}</strong> has been successfully created and is now live!</p>
+
+<div class="info-box">
+    <p><strong>Tournament:</strong> {{ tournament_name }}</p>
+    <p><strong>Game:</strong> {{ game_name }}</p>
+    <p><strong>Start Date:</strong> {{ start_date }}</p>
+    <p><strong>Max Participants:</strong> {{ max_participants }}</p>
+    <p><strong>Plan Type:</strong> {{ plan_type }}</p>
+</div>
+
+<p>Players can now register for your tournament. You can manage registrations, update details, and monitor activity from your host dashboard.</p>
+
+<a href="{{ tournament_manage_url }}" class="button">Manage Tournament</a>
+
+<div class="divider"></div>
+
+<p style="font-size: 14px; color: #6c757d;">
+    <strong>Tip:</strong> Share your tournament link with players to increase registrations: <br>
+    <a href="{{ tournament_url }}" style="color: #667eea;">{{ tournament_url }}</a>
+</p>
+{% endblock %}

@@ -1,0 +1,38 @@
+{% extends "emails/base.html" %}
+
+{% block title %}Verify Your Email - Scrimverse{% endblock %}
+
+{% block content %}
+<h2>Verify Your Email Address 📧</h2>
+
+<p>Hi {{ user_name }},</p>
+
+<p>Thank you for registering with Scrimverse! To complete your registration and start using your account, please verify your email address.</p>
+
+<div class="info-box">
+    <p><strong>Why verify?</strong></p>
+    <p>✅ Secure your account</p>
+    <p>✅ Receive important notifications</p>
+    <p>✅ Access all platform features</p>
+    <p>✅ Participate in tournaments</p>
+</div>
+
+<p>Click the button below to verify your email address:</p>
+
+<a href="{{ verification_url }}" class="button">Verify Email Address</a>
+
+<div class="divider"></div>
+
+<p style="font-size: 14px; color: #6c757d;">
+    If the button doesn't work, copy and paste this link into your browser:<br>
+    <a href="{{ verification_url }}" style="color: #667eea; word-break: break-all;">{{ verification_url }}</a>
+</p>
+
+<p style="font-size: 14px; color: #6c757d;">
+    This verification link will expire in <strong>24 hours</strong>.
+</p>
+
+<p style="font-size: 14px; color: #6c757d;">
+    If you didn't create an account with Scrimverse, please ignore this email.
+</p>
+{% endblock %}

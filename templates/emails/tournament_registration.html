@@ -1,0 +1,31 @@
+{% extends "emails/base.html" %}
+
+{% block title %}Tournament Registration Successful{% endblock %}
+
+{% block content %}
+<h2>Registration Confirmed! 🎮</h2>
+
+<p>Hi {{ user_name }},</p>
+
+<p>You've successfully registered for <strong>{{ tournament_name }}</strong>!</p>
+
+<div class="info-box">
+    <p><strong>Tournament:</strong> {{ tournament_name }}</p>
+    <p><strong>Game:</strong> {{ game_name }}</p>
+    <p><strong>Start Date:</strong> {{ start_date }}</p>
+    <p><strong>Registration ID:</strong> {{ registration_id }}</p>
+    {% if team_name %}
+    <p><strong>Team:</strong> {{ team_name }}</p>
+    {% endif %}
+</div>
+
+<p>Get ready to compete! Make sure you're prepared before the tournament starts.</p>
+
+<a href="{{ tournament_url }}" class="button">View Tournament Details</a>
+
+<div class="divider"></div>
+
+<p style="font-size: 14px; color: #6c757d;">
+    <strong>Important:</strong> Please check the tournament rules and schedule. We'll send you a reminder before the tournament begins.
+</p>
+{% endblock %}

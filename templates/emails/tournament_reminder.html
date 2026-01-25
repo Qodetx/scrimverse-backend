@@ -1,0 +1,33 @@
+{% extends "emails/base.html" %}
+
+{% block title %}Tournament Starting Today{% endblock %}
+
+{% block content %}
+<h2>Tournament Reminder! ⏰</h2>
+
+<p>Hi {{ host_name }},</p>
+
+<p>This is a reminder that your tournament <strong>{{ tournament_name }}</strong> is starting today!</p>
+
+<div class="info-box">
+    <p><strong>Tournament:</strong> {{ tournament_name }}</p>
+    <p><strong>Start Time:</strong> {{ start_time }}</p>
+    <p><strong>Total Registrations:</strong> {{ total_registrations }}</p>
+    <p><strong>Status:</strong> Ready to Begin</p>
+</div>
+
+<p>Make sure everything is ready:</p>
+<ul style="margin: 15px 0; padding-left: 20px;">
+    <li>✅ Review all registrations</li>
+    <li>✅ Confirm tournament settings</li>
+    <li>✅ Prepare to publish results</li>
+</ul>
+
+<a href="{{ tournament_manage_url }}" class="button">Manage Tournament</a>
+
+<div class="divider"></div>
+
+<p style="font-size: 14px; color: #6c757d;">
+    Good luck with your tournament! Remember to publish results promptly after completion.
+</p>
+{% endblock %}

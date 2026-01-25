@@ -21,6 +21,16 @@ class User(AbstractUser):
     profile_picture = models.ImageField(upload_to="profiles/", blank=True, null=True)
     username_change_count = models.IntegerField(default=0)
     last_username_change = models.DateTimeField(null=True, blank=True)
+
+    # Email Verification
+    is_email_verified = models.BooleanField(default=False, help_text="Whether email is verified")
+    email_verification_token = models.CharField(
+        max_length=100, blank=True, null=True, help_text="Token for email verification"
+    )
+    email_verification_sent_at = models.DateTimeField(
+        null=True, blank=True, help_text="When verification email was sent"
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -90,9 +100,7 @@ class HostProfile(models.Model):
     verification_status = models.CharField(
         max_length=20, choices=VERIFICATION_STATUS_CHOICES, default="pending", help_text="Verification status"
     )
-    verification_notes = models.TextField(
-        blank=True, help_text="Admin notes for verification (e.g., rejection reason)"
-    )
+    verification_notes = models.TextField(blank=True, help_text="Admin notes for verification (e.g., rejection reason)")
 
     def __str__(self):
         return f"Host: {self.user.username}"

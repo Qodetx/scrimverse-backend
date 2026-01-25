@@ -9,7 +9,15 @@ from django.db.models import Avg
 from celery import shared_task
 
 from accounts.models import Team, User
+from scrimverse.email_utils import (
+    send_password_changed_email,
+    send_password_reset_email,
+    send_verification_email,
+    send_welcome_email,
+)
 from tournaments.models import HostRating
+
+logger = logging.getLogger(__name__)
 
 
 @shared_task
@@ -81,37 +89,44 @@ def process_team_invitation(team_id, player_id, invitation_type):
         return {"error": str(e)}
 
 
-# @shared_task
-# def notify_invitation_response(team_id, player_id, action):
-#     """
-#     Notify team captain when player accepts/rejects invitation
-#     - Send email to captain
-#     - Update team activity log
+# ============================================================================
+# ACCOUNT EMAIL TASKS
+# ============================================================================
+# Account-related email notifications (authentication, security)
+# ============================================================================
 
-#     Priority: 🔥🔥 HIGH
-#     Impact: User engagement
-#     """
-#     logger = logging.getLogger(__name__)
-#     logger.info(f"Notifying invitation response: team={team_id}, player={player_id}, action={action}")
 
-#     try:
-#         team = Team.objects.get(id=team_id)
-#         player = User.objects.get(id=player_id)
-#         captain = team.captain
+# Account & Security Email Tasks
+@shared_task(name="send_welcome_email_task")
+def send_welcome_email_task(user_email: str, user_name: str, dashboard_url: str, user_type: str = "player"):
+    """Async task to send welcome email after registration"""
+    return send_welcome_email(user_email, user_name, dashboard_url, user_type)
+    logger.info(
+        "Welcome email sent successfully",
+        extra={
+            "user_email": user_email,
+            "user_name": user_name,
+            "dashboard_url": dashboard_url,
+            "user_type": user_type,
+        },
+    )
 
-#         # TODO: Send email notification to captain
-#         # from django.core.mail import send_mail
-#         # send_mail(
-#         #     subject=f"Team Invitation {action.title()}",
-#         #     message=f"{player.username} has {action} your invitation to join {team.team_name}",
-#         #     from_email='noreply@scrimverse.com',
-#         #     recipient_list=[captain.email],
-#         #     fail_silently=True,
-#         # )
 
-#         logger.info(f"Invitation response notification sent")
-#         return {"status": "success", "action": action}
+@shared_task(name="send_verification_email_task")
+def send_verification_email_task(user_email: str, user_name: str, verification_url: str):
+    """Async task to send email verification email"""
+    return send_verification_email(user_email, user_name, verification_url)
 
-#     except Exception as e:
-#         logger.error(f"Error notifying invitation response: {e}")
-#         return {"error": str(e)}
+
+@shared_task(name="send_password_reset_email_task")
+def send_password_reset_email_task(user_email: str, user_name: str, reset_url: str):
+    """Async task to send password reset email"""
+    return send_password_reset_email(user_email, user_name, reset_url)
+
+
+@shared_task(name="send_password_changed_email_task")
+def send_password_changed_email_task(
+    user_email: str, user_name: str, changed_at: str, ip_address: str, dashboard_url: str
+):
+    """Async task to send password changed confirmation email"""
+    return send_password_changed_email(user_email, user_name, changed_at, ip_address, dashboard_url)

@@ -1,6 +1,7 @@
 import logging
 from datetime import timedelta
 
+from django.conf import settings
 from django.contrib.auth import authenticate
 from django.db import models
 from django.utils import timezone
@@ -45,17 +46,35 @@ class PlayerRegistrationView(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
 
-        # Generate JWT tokens
-        refresh = RefreshToken.for_user(user)
+        # Generate verification token
+        import secrets
 
+        verification_token = secrets.token_urlsafe(32)
+        user.email_verification_token = verification_token
+        user.email_verification_sent_at = timezone.now()
+        user.is_email_verified = False  # Explicitly set to False
+        user.is_active = False  # Deactivate account until email is verified
+        user.save(
+            update_fields=["email_verification_token", "email_verification_sent_at", "is_email_verified", "is_active"]
+        )
+
+        # Send verification email (NOT welcome email)
+        from accounts.tasks import send_verification_email_task
+
+        frontend_url = settings.CORS_ALLOWED_ORIGINS[0]
+        verification_url = f"{frontend_url}/verify-email/{verification_token}"
+
+        send_verification_email_task.delay(
+            user_email=user.email, user_name=user.username, verification_url=verification_url
+        )
+        logger.info(f"Verification email sent to player: {user.email}")
+
+        # DO NOT return tokens - user must verify email first
         return Response(
             {
-                "user": UserSerializer(user).data,
-                "tokens": {
-                    "refresh": str(refresh),
-                    "access": str(refresh.access_token),
-                },
-                "message": "Player registered successfully!",
+                "message": "Registration successful! Please check your email to verify your account.",
+                "email": user.email,
+                "verification_required": True,
             },
             status=status.HTTP_201_CREATED,
         )
@@ -75,17 +94,35 @@ class HostRegistrationView(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
 
-        # Generate JWT tokens
-        refresh = RefreshToken.for_user(user)
+        # Generate verification token
+        import secrets
 
+        verification_token = secrets.token_urlsafe(32)
+        user.email_verification_token = verification_token
+        user.email_verification_sent_at = timezone.now()
+        user.is_email_verified = False  # Explicitly set to False
+        user.is_active = False  # Deactivate account until email is verified
+        user.save(
+            update_fields=["email_verification_token", "email_verification_sent_at", "is_email_verified", "is_active"]
+        )
+
+        # Send verification email (NOT welcome email)
+        from accounts.tasks import send_verification_email_task
+
+        frontend_url = settings.CORS_ALLOWED_ORIGINS[0]
+        verification_url = f"{frontend_url}/verify-email/{verification_token}"
+
+        send_verification_email_task.delay(
+            user_email=user.email, user_name=user.username, verification_url=verification_url
+        )
+        logger.info(f"Verification email sent to host: {user.email}")
+
+        # DO NOT return tokens - user must verify email first
         return Response(
             {
-                "user": UserSerializer(user).data,
-                "tokens": {
-                    "refresh": str(refresh),
-                    "access": str(refresh.access_token),
-                },
-                "message": "Host registered successfully!",
+                "message": "Registration successful! Please check your email to verify your account.",
+                "email": user.email,
+                "verification_required": True,
             },
             status=status.HTTP_201_CREATED,
         )
@@ -123,6 +160,19 @@ class LoginView(APIView):
         user = authenticate(request, username=email, password=password)
 
         if user is None:
+            # Check if login failed because account is inactive
+            if user_obj and not user_obj.is_active:
+                logger.warning(f"Login failed - Account inactive/unverified for email: {email}")
+                return Response(
+                    {
+                        "error": (
+                            "Please verify your email address before logging in. "
+                            "Check your inbox for the verification link."
+                        )
+                    },
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+
             logger.warning(f"Login failed - Incorrect password for email: {email}")
             return Response({"error": "Incorrect password. Please try again."}, status=status.HTTP_401_UNAUTHORIZED)
 
@@ -242,6 +292,8 @@ class GoogleAuthView(APIView):
                     username=username,
                     user_type=user_type,
                     phone_number=phone_number,
+                    is_email_verified=True,  # Google already verified email
+                    is_active=True,  # Activate account immediately
                 )
 
                 # Set unusable password for OAuth users
@@ -253,6 +305,19 @@ class GoogleAuthView(APIView):
                     PlayerProfile.objects.create(user=user)
                 else:
                     HostProfile.objects.create(user=user)
+
+                # Send welcome email asynchronously
+                from accounts.tasks import send_welcome_email_task
+
+                if user_type == "player":
+                    dashboard_url = f"{settings.CORS_ALLOWED_ORIGINS[0]}/dashboard"
+                else:
+                    dashboard_url = f"{settings.CORS_ALLOWED_ORIGINS[0]}/host/dashboard"
+
+                send_welcome_email_task.delay(
+                    user_email=user.email, user_name=user.username, dashboard_url=dashboard_url, user_type=user_type
+                )
+                logger.info(f"Welcome email queued for Google OAuth {user_type}: {user.email}")
 
                 message = "Account created successfully!"
                 logger.debug(f"Google OAuth account created - ID: {user.id}, Username: {username}, Type: {user_type}")

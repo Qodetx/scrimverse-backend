@@ -14,6 +14,16 @@ from PIL import Image
 
 from accounts.models import HostProfile, PlayerProfile, Team, TeamStatistics
 from payments.models import Payment
+from scrimverse.email_utils import (
+    send_host_approved_email,
+    send_premium_tournament_promo_email,
+    send_registration_limit_reached_email,
+    send_tournament_completed_email,
+    send_tournament_created_email,
+    send_tournament_registration_email,
+    send_tournament_reminder_email,
+    send_tournament_results_email,
+)
 from tournaments.models import Match, MatchScore, RoundScore, Tournament, TournamentRegistration
 from tournaments.services import TournamentGroupService
 
@@ -639,3 +649,177 @@ def process_tournament_banner(tournament_id, image_path):
     except Exception as e:
         logger.error(f"Error processing banner: {e}")
         return {"error": str(e)}
+
+
+# ============================================================================
+# TOURNAMENT EMAIL TASKS
+# ============================================================================
+# Tournament-related email notifications
+# ============================================================================
+
+
+# Player-Side Tournament Emails
+@shared_task(name="send_tournament_registration_email_task")
+def send_tournament_registration_email_task(
+    user_email: str,
+    user_name: str,
+    tournament_name: str,
+    game_name: str,
+    start_date: str,
+    registration_id: str,
+    tournament_url: str,
+    team_name: str = None,
+):
+    """Async task to send tournament registration confirmation email"""
+    return send_tournament_registration_email(
+        user_email,
+        user_name,
+        tournament_name,
+        game_name,
+        start_date,
+        registration_id,
+        tournament_url,
+        team_name,
+    )
+
+
+@shared_task(name="send_tournament_results_email_task")
+def send_tournament_results_email_task(
+    user_email: str,
+    user_name: str,
+    tournament_name: str,
+    position: int,
+    total_participants: int,
+    results_url: str,
+    team_name: str = None,
+):
+    """Async task to send tournament results email"""
+    return send_tournament_results_email(
+        user_email, user_name, tournament_name, position, total_participants, results_url, team_name
+    )
+
+
+@shared_task(name="send_premium_tournament_promo_email_task")
+def send_premium_tournament_promo_email_task(
+    user_email: str,
+    user_name: str,
+    tournament_name: str,
+    game_name: str,
+    prize_pool: str,
+    registration_deadline: str,
+    start_date: str,
+    tournament_url: str,
+):
+    """Async task to send premium tournament promo email"""
+    return send_premium_tournament_promo_email(
+        user_email,
+        user_name,
+        tournament_name,
+        game_name,
+        prize_pool,
+        registration_deadline,
+        start_date,
+        tournament_url,
+    )
+
+
+# Host-Side Tournament Emails
+@shared_task(name="send_host_approved_email_task")
+def send_host_approved_email_task(
+    user_email: str, user_name: str, host_name: str, approved_at: str, host_dashboard_url: str
+):
+    """Async task to send host account approval email"""
+    return send_host_approved_email(user_email, user_name, host_name, approved_at, host_dashboard_url)
+
+
+@shared_task(name="send_tournament_created_email_task")
+def send_tournament_created_email_task(
+    host_email: str,
+    host_name: str,
+    tournament_name: str,
+    game_name: str,
+    start_date: str,
+    max_participants: int,
+    plan_type: str,
+    tournament_url: str,
+    tournament_manage_url: str,
+):
+    """Async task to send tournament created confirmation email"""
+    return send_tournament_created_email(
+        host_email,
+        host_name,
+        tournament_name,
+        game_name,
+        start_date,
+        max_participants,
+        plan_type,
+        tournament_url,
+        tournament_manage_url,
+    )
+
+
+@shared_task(name="send_tournament_reminder_email_task")
+def send_tournament_reminder_email_task(
+    host_email: str,
+    host_name: str,
+    tournament_name: str,
+    start_time: str,
+    total_registrations: int,
+    tournament_manage_url: str,
+):
+    """Async task to send tournament reminder email (same day)"""
+    return send_tournament_reminder_email(
+        host_email, host_name, tournament_name, start_time, total_registrations, tournament_manage_url
+    )
+
+
+@shared_task(name="send_registration_limit_reached_email_task")
+def send_registration_limit_reached_email_task(
+    host_email: str,
+    host_name: str,
+    tournament_name: str,
+    total_registrations: int,
+    max_participants: int,
+    start_date: str,
+    tournament_manage_url: str,
+):
+    """Async task to send registration limit reached notification"""
+    return send_registration_limit_reached_email(
+        host_email,
+        host_name,
+        tournament_name,
+        total_registrations,
+        max_participants,
+        start_date,
+        tournament_manage_url,
+    )
+
+
+@shared_task(name="send_tournament_completed_email_task")
+def send_tournament_completed_email_task(
+    host_email: str,
+    host_name: str,
+    tournament_name: str,
+    completed_at: str,
+    total_participants: int,
+    total_matches: int,
+    winner_name: str,
+    runner_up_name: str,
+    total_registrations: int,
+    results_published: bool,
+    tournament_manage_url: str,
+):
+    """Async task to send tournament completion summary email"""
+    return send_tournament_completed_email(
+        host_email,
+        host_name,
+        tournament_name,
+        completed_at,
+        total_participants,
+        total_matches,
+        winner_name,
+        runner_up_name,
+        total_registrations,
+        results_published,
+        tournament_manage_url,
+    )

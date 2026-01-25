@@ -1,0 +1,36 @@
+{% extends "emails/base.html" %}
+
+{% block title %}Tournament Results Published{% endblock %}
+
+{% block content %}
+<h2>Tournament Results Are In! 🏆</h2>
+
+<p>Hi {{ user_name }},</p>
+
+<p>The results for <strong>{{ tournament_name }}</strong> have been published!</p>
+
+<div class="info-box">
+    <p><strong>Tournament:</strong> {{ tournament_name }}</p>
+    <p><strong>Your Position:</strong> {{ position }}</p>
+    {% if team_name %}
+    <p><strong>Team:</strong> {{ team_name }}</p>
+    {% endif %}
+    <p><strong>Total Participants:</strong> {{ total_participants }}</p>
+</div>
+
+{% if position <= 3 %}
+<p style="font-size: 18px; color: #667eea; font-weight: 600;">
+    🎉 Congratulations! You finished in the top 3!
+</p>
+{% endif %}
+
+<p>Check out the complete standings and detailed statistics:</p>
+
+<a href="{{ results_url }}" class="button">View Full Results</a>
+
+<div class="divider"></div>
+
+<p style="font-size: 14px; color: #6c757d;">
+    Thank you for participating! Keep competing and improving your skills in upcoming tournaments.
+</p>
+{% endblock %}

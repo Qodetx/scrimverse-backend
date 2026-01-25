@@ -1,0 +1,35 @@
+{% extends "emails/base.html" %}
+
+{% block title %}Registration Limit Reached{% endblock %}
+
+{% block content %}
+<h2>Registration Limit Reached! 🎯</h2>
+
+<p>Hi {{ host_name }},</p>
+
+<p>Great news! Your tournament <strong>{{ tournament_name }}</strong> has reached its maximum registration limit!</p>
+
+<div class="info-box">
+    <p><strong>Tournament:</strong> {{ tournament_name }}</p>
+    <p><strong>Total Registrations:</strong> {{ total_registrations }} / {{ max_participants }}</p>
+    <p><strong>Start Date:</strong> {{ start_date }}</p>
+    <p><strong>Status:</strong> Full</p>
+</div>
+
+<p>Your tournament is now fully booked! New registrations are automatically closed.</p>
+
+<p>What's next:</p>
+<ul style="margin: 15px 0; padding-left: 20px;">
+    <li>Review all registered participants</li>
+    <li>Prepare tournament brackets/groups</li>
+    <li>Send updates to participants if needed</li>
+</ul>
+
+<a href="{{ tournament_manage_url }}" class="button">View Registrations</a>
+
+<div class="divider"></div>
+
+<p style="font-size: 14px; color: #6c757d;">
+    You can still manage registrations from your dashboard if needed.
+</p>
+{% endblock %}

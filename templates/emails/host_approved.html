@@ -1,0 +1,33 @@
+{% extends "emails/base.html" %}
+
+{% block title %}Host Account Approved{% endblock %}
+
+{% block content %}
+<h2>Congratulations! Your Host Account is Approved! 🎉</h2>
+
+<p>Hi {{ user_name }},</p>
+
+<p>Great news! Your host account application has been reviewed and approved. You can now start creating and managing tournaments on Scrimverse!</p>
+
+<div class="info-box">
+    <p><strong>Host Name:</strong> {{ host_name }}</p>
+    <p><strong>Approved on:</strong> {{ approved_at }}</p>
+    <p><strong>Account Type:</strong> Tournament Host</p>
+</div>
+
+<p>As a verified host, you can now:</p>
+<ul style="margin: 15px 0; padding-left: 20px;">
+    <li>Create unlimited tournaments</li>
+    <li>Manage registrations and participants</li>
+    <li>Publish results and standings</li>
+    <li>Access advanced analytics</li>
+</ul>
+
+<a href="{{ host_dashboard_url }}" class="button">Go to Host Dashboard</a>
+
+<div class="divider"></div>
+
+<p style="font-size: 14px; color: #6c757d;">
+    Need help creating your first tournament? Check out our <a href="{{ guide_url }}" style="color: #667eea;">Host Guide</a>.
+</p>
+{% endblock %}
