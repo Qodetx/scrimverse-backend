@@ -46,7 +46,7 @@ class ConfigureRoundView(generics.GenericAPIView):
         tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
 
         logger.info(
-            f"Configuring round - Tournament: {tournament.name} ({tournament.id}), Round: {round_number}, Event Mode: {tournament.event_mode}"  # noqa E501
+            f"Configuring round - Tournament: {tournament.title} ({tournament.id}), Round: {round_number}, Event Mode: {tournament.event_mode}"  # noqa E501
         )
 
         # Validate round number
@@ -250,19 +250,35 @@ class RoundGroupsListView(generics.GenericAPIView):
                             "started_at": match.started_at,
                             "ended_at": match.ended_at,
                             "scores_submitted": match.scores.exists(),
-                            "scores": [
-                                {
-                                    "team_id": score.team.team.id if score.team and score.team.team else None,
-                                    "team_name": score.team.team_name,
-                                    "profile_picture": score.team.team.profile_picture.url
-                                    if score.team and score.team.team and score.team.team.profile_picture
-                                    else None,
-                                    "position_points": score.position_points,
-                                    "kill_points": score.kill_points,
-                                    "wins": score.wins,
-                                }
-                                for score in match.scores.all()
-                            ],
+                            "scores": (
+                                [
+                                    {
+                                        "team_id": score.team.team.id if score.team and score.team.team else None,
+                                        "team_name": score.team.team_name,
+                                        "profile_picture": score.team.team.profile_picture.url
+                                        if score.team and score.team.team and score.team.team.profile_picture
+                                        else None,
+                                        "position_points": score.position_points,
+                                        "kill_points": score.kill_points,
+                                        "wins": score.wins,
+                                    }
+                                    for score in match.scores.all()
+                                ]
+                                if match.scores.exists()
+                                else [
+                                    {
+                                        "team_id": team.team.id if team.team else None,
+                                        "team_name": team.team_name,
+                                        "profile_picture": team.team.profile_picture.url
+                                        if team.team and team.team.profile_picture
+                                        else None,
+                                        "position_points": 0,
+                                        "kill_points": 0,
+                                        "wins": 0,
+                                    }
+                                    for team in group.teams.all()
+                                ]
+                            ),
                         }
                         for match in matches
                     ],
@@ -357,7 +373,7 @@ class StartMatchView(generics.GenericAPIView):
             }
         )
         logger.debug(
-            f"Match {match_number} started successfully - Tournament: {tournament.name} ({tournament.id}), Group: {group.id}, Match: {match.id}"  # noqa E501
+            f"Match {match_number} started successfully - Tournament: {tournament.title} ({tournament.id}), Group: {group.id}, Match: {match.id}"  # noqa E501
         )
 
 
@@ -397,7 +413,7 @@ class EndMatchView(generics.GenericAPIView):
             }
         )
         logger.debug(
-            f"Match {match.match_number} ended successfully - Tournament: {tournament.name} ({tournament.id}), Match: {match.id}"  # noqa E501
+            f"Match {match.match_number} ended successfully - Tournament: {tournament.title} ({tournament.id}), Match: {match.id}"  # noqa E501
         )
 
 

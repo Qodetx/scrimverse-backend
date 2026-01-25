@@ -91,6 +91,15 @@ class Tournament(models.Model):
     #   {"round": 3, "max_teams": 20, "qualifying_teams": 1}
     # ]
 
+    # Custom Round Names
+    round_names = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Custom names for rounds: {'1': 'Qualifiers', '2': 'Semi Finals', '3': 'Grand Finals'}",
+    )
+    # Example: {"1": "Qualifiers", "2": "Semi Finals", "3": "Grand Finals"}
+    # If not specified, defaults to "Round 1", "Round 2", etc.
+
     # Round Management
     current_round = models.IntegerField(default=0, help_text="Current active round (0 = not started)")
     round_status = models.JSONField(
@@ -152,13 +161,19 @@ class Tournament(models.Model):
         """Get total number of rounds"""
         return len(self.rounds) if self.rounds else 0
 
+    def get_round_name(self, round_number):
+        """Get the name for a specific round"""
+        if self.round_names and str(round_number) in self.round_names:
+            return self.round_names[str(round_number)]
+        return f"Round {round_number}"
+
     def get_default_banner_path(self):
         """Get default banner path based on game name"""
         banner_mapping = {
             "BGMI": "tournaments/default_banners/BGMI_Banner.jpeg",
             "COD": "tournaments/default_banners/COD_Banner.jpg",
-            "Freefire": "tournaments/default_banners/Freefire_banner.jpeg",
-            "Scarfall": "tournaments/default_banners/Scarfall_banner.jpeg",
+            "Freefire": "tournaments/default_banners/Freefire_Banner.jpeg",
+            "Scarfall": "tournaments/default_banners/Scarfall_Banner.jpeg",
         }
         return banner_mapping.get(self.game_name, "tournaments/default_banners/BGMI_Banner.jpeg")
 

@@ -104,8 +104,23 @@ class TournamentSerializer(serializers.ModelSerializer):
 
         return attrs
 
-    # Note: Tournament creation is now handled in the payment flow
-    # The tournament is only created AFTER successful payment to avoid slot reservation issues
+    def to_representation(self, instance):
+        """Custom representation to ensure default banner fallback"""
+        data = super().to_representation(instance)
+        from django.conf import settings
+
+        # Check if banner_image is null in the model instance
+        if not instance.banner_image:
+            default_banner_path = instance.get_default_banner_path()
+            if settings.USE_S3:
+                data["banner_image"] = f"https://{settings.AWS_S3_CUSTOM_DOMAIN}/media/{default_banner_path}"
+            else:
+                request = self.context.get("request")
+                if request:
+                    data["banner_image"] = request.build_absolute_uri(f"{settings.MEDIA_URL}{default_banner_path}")
+                else:
+                    data["banner_image"] = f"{settings.MEDIA_URL}{default_banner_path}"
+        return data
 
 
 class TournamentListSerializer(serializers.ModelSerializer):
@@ -128,6 +143,8 @@ class TournamentListSerializer(serializers.ModelSerializer):
             "current_participants",
             "entry_fee",
             "prize_pool",
+            "registration_start",
+            "registration_end",
             "tournament_start",
             "status",
             "banner_image",
@@ -142,10 +159,10 @@ class TournamentListSerializer(serializers.ModelSerializer):
         return {"id": obj.host.id, "username": obj.host.user.username}
 
     def get_banner_image(self, obj):
-        """Return custom banner for premium, default banner for basic/featured"""
+        """Return custom banner for premium, default banner for basic/featured/premium fallback"""
         from django.conf import settings
 
-        # If custom banner exists (premium plan), return it
+        # If custom banner exists, return it
         if obj.banner_image:
             if settings.USE_S3:
                 # S3 URL
@@ -157,20 +174,17 @@ class TournamentListSerializer(serializers.ModelSerializer):
                     return request.build_absolute_uri(obj.banner_image.url)
                 return obj.banner_image.url
 
-        # For basic/featured plans without custom banner, return default banner URL
-        if obj.plan_type in ["basic", "featured"]:
-            default_banner_path = obj.get_default_banner_path()
-            if settings.USE_S3:
-                # Construct S3 URL for default banner
-                return f"https://{settings.AWS_S3_CUSTOM_DOMAIN}/media/{default_banner_path}"
-            else:
-                # Local URL for default banner
-                request = self.context.get("request")
-                if request:
-                    return request.build_absolute_uri(f"{settings.MEDIA_URL}{default_banner_path}")
-                return f"{settings.MEDIA_URL}{default_banner_path}"
-
-        return None
+        # Fallback to default banner for all plans
+        default_banner_path = obj.get_default_banner_path()
+        if settings.USE_S3:
+            # Construct S3 URL for default banner
+            return f"https://{settings.AWS_S3_CUSTOM_DOMAIN}/media/{default_banner_path}"
+        else:
+            # Local URL for default banner
+            request = self.context.get("request")
+            if request:
+                return request.build_absolute_uri(f"{settings.MEDIA_URL}{default_banner_path}")
+            return f"{settings.MEDIA_URL}{default_banner_path}"
 
 
 class TournamentRegistrationSerializer(serializers.ModelSerializer):

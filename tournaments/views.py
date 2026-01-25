@@ -1231,6 +1231,7 @@ class TournamentStatsView(generics.GenericAPIView):
             {
                 "tournament": tournament.title,
                 "game": tournament.game_name,
+                "event_mode": tournament.event_mode,
                 "status": tournament.status,
                 "leaderboard": leaderboard,
             }
@@ -1241,7 +1242,7 @@ class UpdateTournamentFieldsView(generics.UpdateAPIView):
     """
     Update specific tournament fields (restricted - host only)
     PUT/PATCH /api/tournaments/<pk>/update-fields/
-    Only allows updating: title, description, rules, banner_image
+    Only allows updating: title, description, rules, rounds, round_names
     """
 
     queryset = Tournament.objects.all()
@@ -1257,18 +1258,36 @@ class UpdateTournamentFieldsView(generics.UpdateAPIView):
         instance = self.get_object()
 
         # Only allow updating specific fields
-        allowed_fields = ["title", "description", "rules", "banner_image"]
+        allowed_fields = ["title", "description", "rules", "round_names", "rounds"]
         data = request.data.copy()
 
         # Filter to only allowed fields
         filtered_data = {k: v for k, v in data.items() if k in allowed_fields}
 
-        # Handle file uploads
-        if "banner_image" in request.FILES:
-            filtered_data["banner_image"] = request.FILES["banner_image"]
-        elif "banner_image" in data and (data["banner_image"] == "" or data["banner_image"] == "null"):
-            # Remove empty banner_image to keep existing one
-            filtered_data.pop("banner_image", None)
+        # Handle JSON fields
+        if "round_names" in filtered_data:
+            import json
+
+            try:
+                if isinstance(filtered_data["round_names"], str):
+                    filtered_data["round_names"] = json.loads(filtered_data["round_names"])
+            except (json.JSONDecodeError, TypeError):
+                pass  # Let serializer validation handle invalid JSON
+
+        if "rounds" in filtered_data:
+            import json
+
+            try:
+                if isinstance(filtered_data["rounds"], str):
+                    filtered_data["rounds"] = json.loads(filtered_data["rounds"])
+            except (json.JSONDecodeError, TypeError):
+                pass  # Let serializer validation handle invalid JSON
+
+        logger.info(f"Updating tournament {instance.id} with fields: {list(filtered_data.keys())}")
+        if "rounds" in filtered_data:
+            logger.info(f"New rounds data: {filtered_data['rounds']}")
+        if "round_names" in filtered_data:
+            logger.info(f"New round_names data: {filtered_data['round_names']}")
 
         serializer = self.get_serializer(instance, data=filtered_data, partial=True)
         serializer.is_valid(raise_exception=True)
