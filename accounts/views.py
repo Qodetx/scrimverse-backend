@@ -596,8 +596,8 @@ class HostSearchView(APIView):
             if res["profile_picture"] and not res["profile_picture"].startswith("http"):
                 res["profile_picture"] = request.build_absolute_uri(res["profile_picture"])
 
-        return Response({"results": results}, status=status.HTTP_200_OK)
         logger.debug(f"Host search results - Query: {query}, Results: {len(results)}")
+        return Response({"results": results}, status=status.HTTP_200_OK)
 
 
 class IsPlayerUser(permissions.BasePermission):
@@ -631,11 +631,20 @@ class TeamViewSet(viewsets.ModelViewSet):
         # For list action, check for "mine" parameter to filter by user's teams
         if self.action == "list":
             mine = self.request.query_params.get("mine") == "true"
+            search = self.request.query_params.get("search", "").strip()
+
             if mine:
-                return Team.objects.filter(
+                queryset = Team.objects.filter(
                     models.Q(captain=self.request.user) | models.Q(members__user=self.request.user)
                 ).distinct()
-            return Team.objects.all()
+            else:
+                queryset = Team.objects.all()
+
+            # Apply search filter if provided
+            if search:
+                queryset = queryset.filter(name__icontains=search)
+
+            return queryset
 
         # For actions that handle their own permission checks or should return 403 instead of 404
         # we return all teams and let the action/update/delete method handle the check.
