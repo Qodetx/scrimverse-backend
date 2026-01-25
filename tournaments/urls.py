@@ -10,6 +10,7 @@ from tournaments.groups_views import (
     StartMatchView,
     SubmitMatchScoresView,
 )
+from tournaments.pricing_views import PlanPricingView
 from tournaments.views import (  # Tournament URLs; Registration URLs; Rating URLs
     EndRoundView,
     EndTournamentView,
@@ -39,6 +40,8 @@ from tournaments.views import (  # Tournament URLs; Registration URLs; Rating UR
 )
 
 urlpatterns = [
+    # Plan Pricing (Public)
+    path("plan-pricing/", PlanPricingView.as_view(), name="plan-pricing"),
     # Platform Stats
     path("stats/platform/", PlatformStatsView.as_view(), name="platform-stats"),
     path("stats/host/", HostDashboardStatsView.as_view(), name="host-stats"),

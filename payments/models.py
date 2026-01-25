@@ -1,8 +1,68 @@
+from decimal import Decimal
+
 from django.db import models
 from django.utils import timezone
 
 from accounts.models import HostProfile, PlayerProfile
 from tournaments.models import Tournament, TournamentRegistration
+
+
+class PlanPricing(models.Model):
+    """
+    Dynamic pricing for tournament and scrim plans.
+    Admins can adjust prices without code changes.
+    """
+
+    PLAN_TYPES = [
+        ("tournament_basic", "Tournament - Basic"),
+        ("tournament_featured", "Tournament - Featured"),
+        ("tournament_premium", "Tournament - Premium"),
+        ("scrim_basic", "Scrim - Basic"),
+        ("scrim_featured", "Scrim - Featured"),
+        ("scrim_premium", "Scrim - Premium"),
+    ]
+
+    plan_type = models.CharField(max_length=50, choices=PLAN_TYPES, unique=True, db_index=True)
+    price = models.DecimalField(max_digits=10, decimal_places=2, help_text="Price in INR (set to 0 for free plans)")
+    is_active = models.BooleanField(default=True, help_text="Enable/disable this plan")
+    description = models.TextField(blank=True, help_text="Internal notes about this pricing")
+    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Plan Pricing"
+        verbose_name_plural = "Plan Pricing"
+        ordering = ["plan_type"]
+
+    def __str__(self):
+        return f"{self.get_plan_type_display()} - ₹{self.price}"
+
+    @classmethod
+    def get_price(cls, event_mode, plan_type):
+        """
+        Get the price for a specific plan.
+        Falls back to hardcoded defaults if not found in database.
+        """
+        # Construct the full plan type key
+        if event_mode == "SCRIM":
+            full_plan_type = f"scrim_{plan_type}"
+        else:
+            full_plan_type = f"tournament_{plan_type}"
+
+        try:
+            pricing = cls.objects.get(plan_type=full_plan_type, is_active=True)
+            return pricing.price
+        except cls.DoesNotExist:
+            # Fallback to hardcoded defaults
+            defaults = {
+                "tournament_basic": Decimal("299.00"),
+                "tournament_featured": Decimal("499.00"),
+                "tournament_premium": Decimal("799.00"),
+                "scrim_basic": Decimal("299.00"),
+                "scrim_featured": Decimal("499.00"),
+                "scrim_premium": Decimal("699.00"),
+            }
+            return defaults.get(full_plan_type, Decimal("299.00"))
 
 
 class Payment(models.Model):

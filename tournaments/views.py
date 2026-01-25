@@ -192,10 +192,40 @@ class TournamentCreateView(generics.CreateAPIView):
         plan_type = validated_data.get("plan_type", "basic")
         event_mode = validated_data.get("event_mode", "TOURNAMENT")
 
-        # Determine payment amount based on plan
-        plan_prices = {"basic": 299.00, "featured": 499.00, "premium": 799.00}
-        amount = plan_prices.get(plan_type, 299.00)
+        # Get dynamic price from database (or fallback to defaults)
+        from payments.models import PlanPricing
 
+        amount = PlanPricing.get_price(event_mode, plan_type)
+
+        # ✅ CHECK IF FREE PLAN (amount <= 0)
+        if amount <= 0:
+            # Skip payment, create tournament directly
+            logger.info(f"Free plan detected ({plan_type}), creating tournament directly")
+
+            # Create tournament immediately
+            tournament = serializer.save(
+                host=request.user.host_profile, plan_payment_status=True, plan_payment_id="FREE_PLAN"
+            )
+
+            logger.info(f"Tournament created (free plan): {tournament.id} - {tournament.title}")
+
+            # Invalidate caches
+            cache.delete("tournaments:list:all")
+            cache.delete(f"host:dashboard:{request.user.host_profile.id}")
+
+            return Response(
+                {
+                    "success": True,
+                    "message": "Tournament created successfully (Free Plan)",
+                    "tournament_id": tournament.id,
+                    "payment_required": False,  # Signal to frontend to skip payment
+                    "plan_type": plan_type,
+                    "amount": 0,
+                },
+                status=200,
+            )
+
+        # PAID PLAN - Continue with payment flow
         # Generate unique merchant order ID
         merchant_order_id = f"ORD_{uuid4().hex[:16].upper()}"
 
@@ -292,7 +322,7 @@ class TournamentCreateView(generics.CreateAPIView):
                     "merchant_order_id": merchant_order_id,
                     "phonepe_order_id": phonepe_response.get("order_id"),
                     "redirect_url": phonepe_response.get("redirect_url"),
-                    "amount": amount,
+                    "amount": float(amount),
                     "plan_type": plan_type,
                     "payment_required": True,  # Signal to frontend to open iframe
                 },
@@ -451,6 +481,22 @@ class TournamentRegistrationCreateView(generics.CreateAPIView):
             current_username = self.request.user.username
             if current_username not in player_usernames:
                 raise ValidationError({"player_usernames": "You must include your own username in the team"})
+
+            # ✅ VALIDATE: All player_usernames must be registered players
+            if player_usernames:
+                invalid_usernames = []
+                for username in player_usernames:
+                    if username:
+                        user_exists = User.objects.filter(username=username, user_type="player").exists()
+                        if not user_exists:
+                            invalid_usernames.append(username)
+
+                if invalid_usernames:
+                    raise ValidationError(
+                        {
+                            "player_usernames": f"The following players were not found: {', '.join(invalid_usernames)}. Only registered ScrimVerse players can join tournaments."  # noqa: E501
+                        }
+                    )
 
         # Check if any team member is already registered (check by player profile IDs)
         team_users = User.objects.filter(username__in=player_usernames, user_type="player").select_related(

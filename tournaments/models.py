@@ -31,9 +31,9 @@ class Tournament(models.Model):
     )
 
     PLAN_CHOICES = (
-        ("basic", "Basic Listing - ₹299"),
-        ("featured", "Featured Listing - ₹499"),
-        ("premium", "Premium + Promotion - ₹799"),
+        ("basic", "Basic Listing"),
+        ("featured", "Featured Listing"),
+        ("premium", "Premium + Promotion"),
     )
 
     EVENT_MODE_CHOICES = (
@@ -164,15 +164,6 @@ class Tournament(models.Model):
 
     def save(self, *args, **kwargs):
         """Override save to auto-update status and handle plan logic"""
-        # Set plan price based on plan type
-        plan_prices = {
-            "basic": 299.00,
-            "featured": 499.00,
-            "premium": 799.00,
-        }
-        if self.plan_type in plan_prices:
-            self.plan_price = plan_prices[self.plan_type]
-
         # Enforce max participants for basic plan
         if self.plan_type == "basic" and self.max_participants > 100:
             self.max_participants = 100

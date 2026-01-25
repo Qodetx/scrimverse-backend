@@ -511,23 +511,40 @@ class PlayerUsernameSearchView(APIView):
 
     def get(self, request):
         query = request.query_params.get("q", "").strip()
+        for_team = request.query_params.get("for_team", "false").lower() == "true"
 
         if not query or len(query) < 2:
             return Response({"results": []}, status=status.HTTP_200_OK)
 
-        # Search for players by username (case-insensitive, partial match)
+        # Base query - search for players by username
         players = PlayerProfile.objects.filter(
             user__username__icontains=query, user__user_type="player"
-        ).select_related("user")[
-            :10
-        ]  # Limit to 10 results
+        ).select_related("user")
+
+        # If searching for team creation, apply additional filters
+        if for_team:
+            # Get all user IDs who are already in PERMANENT teams
+            users_in_teams = TeamMember.objects.filter(team__is_temporary=False).values_list("user_id", flat=True)
+
+            # EXCLUDE players who are already in permanent teams
+            players = players.exclude(user_id__in=users_in_teams)
+
+            # Exclude current user if authenticated (they're already the captain)
+            if request.user.is_authenticated:
+                players = players.exclude(user=request.user)
+
+        # Apply slice AFTER all filters
+        players = players[:10]
 
         results = [
             {
-                "id": player.user.id,  # Return user ID, not player profile ID
+                "id": player.user.id,
                 "username": player.user.username,
                 "email": player.user.email,
                 "profile_picture": player.user.profile_picture.url if player.user.profile_picture else None,
+                "in_team": TeamMember.objects.filter(user=player.user, team__is_temporary=False).exists()
+                if not for_team
+                else False,
             }
             for player in players
         ]
@@ -537,8 +554,8 @@ class PlayerUsernameSearchView(APIView):
             if res["profile_picture"] and not res["profile_picture"].startswith("http"):
                 res["profile_picture"] = request.build_absolute_uri(res["profile_picture"])
 
+        logger.debug(f"Player search results - Query: {query}, For Team: {for_team}, Results: {len(results)}")
         return Response({"results": results}, status=status.HTTP_200_OK)
-        logger.debug(f"Player search results - Query: {query}, Results: {len(results)}")
 
 
 class HostSearchView(APIView):
@@ -656,12 +673,64 @@ class TeamViewSet(viewsets.ModelViewSet):
 
         # Check if captain
         if team.captain == request.user:
-            return Response(
-                {"error": "Captains cannot leave the team. Transfer captaincy or delete the team instead."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            # Captain is leaving - check if there are other members
+            other_members = TeamMember.objects.filter(team=team).exclude(user=request.user).order_by("id")
 
+            if other_members.exists():
+                # Promote the oldest member (first added) to captain
+                new_captain_member = other_members.first()
+
+                if new_captain_member.user:
+                    # Update team captain
+                    team.captain = new_captain_member.user
+                    team.save()
+
+                    # Update captain flags
+                    TeamMember.objects.filter(team=team).update(is_captain=False)
+                    new_captain_member.is_captain = True
+                    new_captain_member.save()
+
+                    # Remove the old captain
+                    member.delete()
+
+                    logger.info(
+                        f"Captain {request.user.username} left team {team.name}. "
+                        f"New captain: {new_captain_member.username}"
+                    )
+
+                    return Response(
+                        {
+                            "message": f"You have left the team. {new_captain_member.username} is now the captain.",
+                            "new_captain": new_captain_member.username,
+                        },
+                        status=status.HTTP_200_OK,
+                    )
+                else:
+                    # Next member is not a registered user, cannot promote
+                    return Response(
+                        {
+                            "error": "Cannot leave: next member is not a registered user. Please remove them first or delete the team."  # noqa: E501
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            else:
+                # Captain is the only member - delete the team
+                team_name = team.name
+                team.delete()
+
+                logger.info(f"Team {team_name} deleted as captain {request.user.username} was the only member")
+
+                return Response(
+                    {
+                        "message": f"Team '{team_name}' has been deleted as you were the only member.",
+                        "team_deleted": True,
+                    },
+                    status=status.HTTP_200_OK,
+                )
+
+        # Regular member leaving
         member.delete()
+        logger.info(f"Member {request.user.username} left team {team.name}")
         return Response({"message": "Successfully left the team"}, status=status.HTTP_200_OK)
 
     def perform_create(self, serializer):
@@ -677,6 +746,23 @@ class TeamViewSet(viewsets.ModelViewSet):
             raise ValidationError({"error": "You are already a member of a team. Leave your current team first."})
 
         player_usernames = self.request.data.get("player_usernames", [])
+
+        # ✅ VALIDATE: All player_usernames must be registered players
+        if player_usernames:
+            invalid_usernames = []
+            for username in player_usernames:
+                if username and username != self.request.user.username:
+                    user_exists = User.objects.filter(username=username, user_type="player").exists()
+                    if not user_exists:
+                        invalid_usernames.append(username)
+
+            if invalid_usernames:
+                raise ValidationError(
+                    {
+                        "error": f"The following players were not found: {', '.join(invalid_usernames)}. Only registered ScrimVerse players can be added to teams."  # noqa: E501
+                    }
+                )
+
         team = serializer.save(captain=self.request.user)
         logger.debug(f"Team created - ID: {team.id}, Name: {team.name}, Captain: {self.request.user.username}")
 
@@ -685,10 +771,10 @@ class TeamViewSet(viewsets.ModelViewSet):
             team=team, user=self.request.user, username=self.request.user.username, is_captain=True
         )
 
-        # Add additional members from player_usernames
+        # Add additional members from player_usernames (all validated now)
         for username in player_usernames:
             if username and username != self.request.user.username:
-                user_obj = User.objects.filter(username=username, user_type="player").first()
+                user_obj = User.objects.get(username=username, user_type="player")  # Use .get() since we validated
                 TeamMember.objects.create(team=team, username=username, user=user_obj, is_captain=False)
 
     def update(self, request, *args, **kwargs):
@@ -727,16 +813,27 @@ class TeamViewSet(viewsets.ModelViewSet):
         if not username:
             return Response({"error": "Username is required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Try to find registered user
-        user = User.objects.filter(username=username).first()
+        # ✅ VALIDATE: User must exist and be a player
+        user = User.objects.filter(username=username, user_type="player").first()
+        if not user:
+            return Response(
+                {"error": f"Player '{username}' not found. Only registered ScrimVerse players can be added to teams."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Check if already a member
         if TeamMember.objects.filter(team=team, username=username).exists():
             return Response({"error": "Member already exists"}, status=status.HTTP_400_BAD_REQUEST)
 
-        member = TeamMember.objects.create(team=team, username=username, user=user)
+        # Check if user is already in another PERMANENT team
+        if TeamMember.objects.filter(user=user, team__is_temporary=False).exclude(team=team).exists():
+            return Response(
+                {"error": f"{username} is already a member of another team"}, status=status.HTTP_400_BAD_REQUEST
+            )
 
-        logger.debug(f"Member added - Team: {team.id}, Member: {username}, User ID: {user.id if user else 'None'}")
+        member = TeamMember.objects.create(team=team, username=username, user=user, is_captain=False)
+
+        logger.debug(f"Member added - Team: {team.id}, Member: {username}, User ID: {user.id}")
 
         return Response(TeamMemberSerializer(member).data, status=status.HTTP_201_CREATED)
 

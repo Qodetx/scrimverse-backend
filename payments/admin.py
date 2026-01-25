@@ -1,6 +1,51 @@
 from django.contrib import admin
 
-from .models import Payment, Refund
+from .models import Payment, PlanPricing, Refund
+
+
+@admin.register(PlanPricing)
+class PlanPricingAdmin(admin.ModelAdmin):
+    """Admin interface for Plan Pricing"""
+
+    list_display = [
+        "plan_type",
+        "price_display",
+        "is_active",
+        "updated_at",
+    ]
+    list_filter = ["is_active", "plan_type"]
+    search_fields = ["plan_type", "description"]
+    readonly_fields = ["created_at", "updated_at"]
+    fieldsets = (
+        (
+            "Plan Details",
+            {
+                "fields": (
+                    "plan_type",
+                    "price",
+                    "is_active",
+                )
+            },
+        ),
+        (
+            "Additional Information",
+            {
+                "fields": (
+                    "description",
+                    "created_at",
+                    "updated_at",
+                )
+            },
+        ),
+    )
+    ordering = ["plan_type"]
+
+    def price_display(self, obj):
+        """Display price with currency symbol"""
+        return f"₹{obj.price}"
+
+    price_display.short_description = "Price"
+    price_display.admin_order_field = "price"
 
 
 @admin.register(Payment)
