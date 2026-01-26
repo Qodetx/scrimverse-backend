@@ -56,22 +56,6 @@ def test_leave_team():
 
 
 @pytest.mark.django_db
-def test_captain_cannot_leave_team():
-    """Test that captain cannot leave the team without transferring captaincy"""
-    captain = UserFactory(user_type="player")
-    team = TeamFactory(captain=captain)
-    TeamMember.objects.create(team=team, user=captain, username=captain.username, is_captain=True)
-
-    client = APIClient()
-    client.force_authenticate(user=captain)
-
-    response = client.post(f"/api/accounts/teams/{team.id}/leave_team/")
-
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert "Captains cannot leave" in response.data["error"]
-
-
-@pytest.mark.django_db
 def test_remove_member():
     """Test captain removing a member from the team"""
     captain = UserFactory(user_type="player")

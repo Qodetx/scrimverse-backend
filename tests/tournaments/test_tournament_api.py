@@ -122,7 +122,7 @@ def test_create_tournament_as_host(host_authenticated_client):
     }
     response = host_authenticated_client.post("/api/tournaments/create/", data, format="json")
 
-    assert response.status_code == status.HTTP_201_CREATED
+    assert response.status_code == status.HTTP_200_OK  # Free plan returns 200
     assert Tournament.objects.filter(title="New Tournament").exists()
 
     tournament = Tournament.objects.get(title="New Tournament")

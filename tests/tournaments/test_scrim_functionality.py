@@ -27,8 +27,8 @@ def test_create_scrim_as_host(host_authenticated_client, host_user):
         "game_mode": "Squad",
         "event_mode": "SCRIM",
         "max_participants": 20,
-        "entry_fee": "100.00",
-        "prize_pool": "2000.00",
+        "entry_fee": "0.00",  # Free scrim
+        "prize_pool": "0.00",  # Free scrim
         "registration_start": "2026-01-20T08:00:00Z",
         "registration_end": "2026-01-20T09:00:00Z",
         "tournament_start": "2026-01-20T10:00:00Z",
@@ -39,13 +39,14 @@ def test_create_scrim_as_host(host_authenticated_client, host_user):
 
     response = host_authenticated_client.post("/api/tournaments/create/", data, format="json")
 
-    assert response.status_code == status.HTTP_201_CREATED
-    assert response.data["event_mode"] == "SCRIM"
-    assert response.data["title"] == "Practice Scrim"
+    assert response.status_code == status.HTTP_200_OK  # Free plan returns 200
+    assert response.data.get("payment_required") is False
+    assert response.data.get("tournament_id") is not None
 
     # Verify scrim was created in database
-    scrim = Tournament.objects.get(id=response.data["id"])
+    scrim = Tournament.objects.get(id=response.data["tournament_id"])
     assert scrim.event_mode == "SCRIM"
+    assert scrim.title == "Practice Scrim"
     assert len(scrim.rounds) == 1  # Scrims should have 1 round
     assert scrim.rounds[0]["qualifying_teams"] == 0  # No qualification in scrims
 
@@ -60,8 +61,8 @@ def test_create_scrim_enforces_max_25_teams(host_authenticated_client):
         "game_mode": "Squad",
         "event_mode": "SCRIM",
         "max_participants": 30,  # Exceeds limit
-        "entry_fee": "100.00",
-        "prize_pool": "5000.00",
+        "entry_fee": "0.00",
+        "prize_pool": "0.00",
         "registration_start": "2026-01-20T08:00:00Z",
         "registration_end": "2026-01-20T09:00:00Z",
         "tournament_start": "2026-01-20T10:00:00Z",
@@ -85,8 +86,8 @@ def test_create_scrim_enforces_single_round(host_authenticated_client):
         "game_mode": "Squad",
         "event_mode": "SCRIM",
         "max_participants": 20,
-        "entry_fee": "100.00",
-        "prize_pool": "2000.00",
+        "entry_fee": "0.00",
+        "prize_pool": "0.00",
         "registration_start": "2026-01-20T08:00:00Z",
         "registration_end": "2026-01-20T09:00:00Z",
         "tournament_start": "2026-01-20T10:00:00Z",
@@ -100,8 +101,8 @@ def test_create_scrim_enforces_single_round(host_authenticated_client):
 
     response = host_authenticated_client.post("/api/tournaments/create/", data, format="json")
 
-    assert response.status_code == status.HTTP_201_CREATED
-    scrim = Tournament.objects.get(id=response.data["id"])
+    assert response.status_code == status.HTTP_200_OK  # Free plan returns 200
+    scrim = Tournament.objects.get(id=response.data["tournament_id"])
     assert len(scrim.rounds) == 1  # Should be forced to 1 round
     assert scrim.rounds[0]["round"] == 1
 
@@ -116,8 +117,8 @@ def test_create_scrim_max_matches_constraint(host_authenticated_client):
         "game_mode": "Squad",
         "event_mode": "SCRIM",
         "max_participants": 20,
-        "entry_fee": "100.00",
-        "prize_pool": "2000.00",
+        "entry_fee": "0.00",
+        "prize_pool": "0.00",
         "registration_start": "2026-01-20T08:00:00Z",
         "registration_end": "2026-01-20T09:00:00Z",
         "tournament_start": "2026-01-20T10:00:00Z",
@@ -146,6 +147,7 @@ def test_register_for_scrim(authenticated_client, player_user, test_players, hos
         game_mode="Squad",
         status="upcoming",
         max_participants=25,
+        entry_fee="0.00",  # Free scrim for testing
     )
 
     data = {
@@ -177,6 +179,7 @@ def test_scrim_registration_increments_count(authenticated_client, player_user, 
         status="upcoming",
         max_participants=25,
         current_participants=0,
+        entry_fee="0.00",  # Free scrim for testing
     )
 
     data = {
@@ -192,16 +195,26 @@ def test_scrim_registration_increments_count(authenticated_client, player_user, 
 
 
 @pytest.mark.django_db
-def test_cannot_register_for_full_scrim(authenticated_client, player_user, host_user):
+def test_cannot_register_for_full_scrim(authenticated_client, player_user, host_user, test_players):
     """Test cannot register when scrim is full"""
+    from tests.factories import PlayerProfileFactory, TournamentRegistrationFactory, UserFactory
+
     scrim = TournamentFactory(
         host=host_user.host_profile,
         event_mode="SCRIM",
         game_mode="Solo",
         status="upcoming",
         max_participants=2,
-        current_participants=2,  # Already full
+        entry_fee="0.00",  # Free scrim for testing
     )
+
+    # Create 2 actual registrations to fill the scrim
+    for i in range(2):
+        other_user = UserFactory(user_type="player", username=f"fullscrim{i}")
+        other_profile = PlayerProfileFactory(user=other_user)
+        TournamentRegistrationFactory(
+            tournament=scrim, player=other_profile, team_name=f"Team {i}", payment_status=True
+        )
 
     data = {"team_name": "Late Team", "player_usernames": [player_user.username]}
 
@@ -296,8 +309,8 @@ def test_scrim_has_basic_plan_type(host_authenticated_client):
 
     response = host_authenticated_client.post("/api/tournaments/create/", data, format="json")
 
-    assert response.status_code == status.HTTP_201_CREATED
-    scrim = Tournament.objects.get(id=response.data["id"])
+    assert response.status_code == status.HTTP_200_OK  # Free plan returns 200
+    scrim = Tournament.objects.get(id=response.data["tournament_id"])
     assert scrim.plan_type == "basic"
 
 
@@ -316,8 +329,8 @@ def test_create_solo_scrim(host_authenticated_client):
         "game_mode": "Solo",
         "event_mode": "SCRIM",
         "max_participants": 25,
-        "entry_fee": "50.00",
-        "prize_pool": "1000.00",
+        "entry_fee": "0.00",
+        "prize_pool": "0.00",
         "registration_start": "2026-01-20T08:00:00Z",
         "registration_end": "2026-01-20T09:00:00Z",
         "tournament_start": "2026-01-20T10:00:00Z",
@@ -327,9 +340,12 @@ def test_create_solo_scrim(host_authenticated_client):
 
     response = host_authenticated_client.post("/api/tournaments/create/", data, format="json")
 
-    assert response.status_code == status.HTTP_201_CREATED
-    assert response.data["game_mode"] == "Solo"
-    assert response.data["event_mode"] == "SCRIM"
+    assert response.status_code == status.HTTP_200_OK  # Free plan returns 200
+
+    # Verify from database
+    scrim = Tournament.objects.get(id=response.data["tournament_id"])
+    assert scrim.game_mode == "Solo"
+    assert scrim.event_mode == "SCRIM"
 
 
 @pytest.mark.django_db
@@ -342,8 +358,8 @@ def test_create_duo_scrim(host_authenticated_client):
         "game_mode": "Duo",
         "event_mode": "SCRIM",
         "max_participants": 25,
-        "entry_fee": "100.00",
-        "prize_pool": "2000.00",
+        "entry_fee": "0.00",
+        "prize_pool": "0.00",
         "registration_start": "2026-01-20T08:00:00Z",
         "registration_end": "2026-01-20T09:00:00Z",
         "tournament_start": "2026-01-20T10:00:00Z",
@@ -353,9 +369,12 @@ def test_create_duo_scrim(host_authenticated_client):
 
     response = host_authenticated_client.post("/api/tournaments/create/", data, format="json")
 
-    assert response.status_code == status.HTTP_201_CREATED
-    assert response.data["game_mode"] == "Duo"
-    assert response.data["event_mode"] == "SCRIM"
+    assert response.status_code == status.HTTP_200_OK  # Free plan returns 200
+
+    # Verify from database
+    scrim = Tournament.objects.get(id=response.data["tournament_id"])
+    assert scrim.game_mode == "Duo"
+    assert scrim.event_mode == "SCRIM"
 
 
 @pytest.mark.django_db
@@ -368,8 +387,8 @@ def test_create_squad_scrim(host_authenticated_client):
         "game_mode": "Squad",
         "event_mode": "SCRIM",
         "max_participants": 25,
-        "entry_fee": "200.00",
-        "prize_pool": "5000.00",
+        "entry_fee": "0.00",
+        "prize_pool": "0.00",
         "registration_start": "2026-01-20T08:00:00Z",
         "registration_end": "2026-01-20T09:00:00Z",
         "tournament_start": "2026-01-20T10:00:00Z",
@@ -379,6 +398,9 @@ def test_create_squad_scrim(host_authenticated_client):
 
     response = host_authenticated_client.post("/api/tournaments/create/", data, format="json")
 
-    assert response.status_code == status.HTTP_201_CREATED
-    assert response.data["game_mode"] == "Squad"
-    assert response.data["event_mode"] == "SCRIM"
+    assert response.status_code == status.HTTP_200_OK  # Free plan returns 200
+
+    # Verify from database
+    scrim = Tournament.objects.get(id=response.data["tournament_id"])
+    assert scrim.game_mode == "Squad"
+    assert scrim.event_mode == "SCRIM"

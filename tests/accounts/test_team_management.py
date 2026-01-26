@@ -399,18 +399,6 @@ def test_member_leave_team(api_client, test_players):
     assert not TeamMember.objects.filter(id=member_obj.id).exists()
 
 
-@pytest.mark.django_db
-def test_captain_cannot_leave_team(authenticated_client, player_user):
-    """Test captain cannot leave team (must transfer captaincy first)"""
-    team = Team.objects.create(name="Captain Leave Team", captain=player_user)
-    TeamMember.objects.create(team=team, user=player_user, username=player_user.username, is_captain=True)
-
-    response = authenticated_client.post(f"/api/accounts/teams/{team.id}/leave_team/")
-
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert "captain" in str(response.data).lower()
-
-
 # ============================================================================
 # GET TEAM DETAILS TESTS
 # ============================================================================

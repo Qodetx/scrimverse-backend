@@ -1,6 +1,8 @@
 """
 Pytest fixtures and configuration for Scrimverse tests
 """
+from unittest.mock import patch
+
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
@@ -16,6 +18,29 @@ from tests.factories import (
     TournamentRegistrationFactory,
     UserFactory,
 )
+
+
+@pytest.fixture(autouse=True)
+def mock_phonepe_initiate_payment():
+    """Mock PhonePe payment initiation for all tests"""
+    with patch("payments.services.phonepe_service.initiate_payment") as mock:
+        mock.return_value = {
+            "success": True,
+            "code": "PAYMENT_INITIATED",
+            "message": "Payment initiated successfully",
+            "order_id": "PHONEPE_ORDER_123",
+            "redirect_url": "https://test.phonepe.com/pay/TEST_TXN_123",
+            "data": {
+                "merchantId": "TEST_MERCHANT",
+                "merchantTransactionId": "TEST_TXN_123",
+                "merchantOrderId": "TEST_ORDER_123",
+                "instrumentResponse": {
+                    "redirectInfo": {"url": "https://test.phonepe.com/pay/TEST_TXN_123", "method": "GET"}
+                },
+            },
+        }
+        yield mock
+
 
 User = get_user_model()
 
@@ -174,3 +199,21 @@ def test_players(db):
         PlayerProfileFactory(user=user)
         players.append(user)
     return players
+
+
+@pytest.fixture(autouse=True)
+def free_plan_pricing(db):
+    """Create free plan pricing for tests to avoid payment gateway"""
+    from decimal import Decimal
+
+    from payments.models import PlanPricing
+
+    # Use update_or_create to ensure free pricing for tests
+    PlanPricing.objects.update_or_create(
+        plan_type="tournament_basic",
+        defaults={"price": Decimal("0.00"), "is_active": True, "description": "Free for testing"},
+    )
+    PlanPricing.objects.update_or_create(
+        plan_type="scrim_basic",
+        defaults={"price": Decimal("0.00"), "is_active": True, "description": "Free for testing"},
+    )

@@ -130,6 +130,9 @@ class TournamentListSerializer(serializers.ModelSerializer):
     host = serializers.SerializerMethodField()
     banner_image = serializers.SerializerMethodField()
 
+    is_featured = serializers.BooleanField(read_only=True)
+    is_registered = serializers.SerializerMethodField()
+
     class Meta:
         model = Tournament
         fields = (
@@ -149,11 +152,26 @@ class TournamentListSerializer(serializers.ModelSerializer):
             "status",
             "banner_image",
             "is_featured",
+            "is_registered",
             "plan_type",
             "homepage_banner",
             "event_mode",
             "updated_at",
         )
+
+    def get_is_registered(self, obj):
+        """Check if current user is registered for this tournament"""
+        request = self.context.get("request")
+        if not request or not request.user or not request.user.is_authenticated:
+            return False
+
+        if not hasattr(request.user, "player_profile"):
+            return False
+
+        # Avoid local import if possible, but TournamentRegistration is needed
+        from tournaments.models import TournamentRegistration
+
+        return TournamentRegistration.objects.filter(tournament=obj, player=request.user.player_profile).exists()
 
     def get_host(self, obj):
         return {"id": obj.host.id, "username": obj.host.user.username}

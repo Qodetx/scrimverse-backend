@@ -593,6 +593,7 @@ class TournamentRegistrationCreateView(generics.CreateAPIView):
                     amount_paisa=amount_paisa,
                     user=self.request.user,
                     player_profile=player_profile,
+                    tournament=tournament,  # Link to tournament
                     status="pending",
                     meta_info=meta_info,
                 )

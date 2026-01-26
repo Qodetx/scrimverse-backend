@@ -73,18 +73,18 @@ def test_register_paid_tournament_different_tiers(authenticated_client, player_u
         host=host_user.host_profile, game_mode="Duo", entry_fee=200, prize_pool=2000, status="upcoming"
     )
 
-    # Register for low tier
+    # Register for low tier (paid, so expect payment flow)
     data_low = {"team_name": "Low Tier Team", "player_usernames": [player_user.username]}
     response_low = authenticated_client.post(f"/api/tournaments/{low_tier.id}/register/", data_low, format="json")
-    assert response_low.status_code in [status.HTTP_201_CREATED, status.HTTP_400_BAD_REQUEST]
+    assert response_low.status_code in [status.HTTP_200_OK, status.HTTP_201_CREATED, status.HTTP_400_BAD_REQUEST]
 
-    # Register for mid tier
+    # Register for mid tier (paid, so expect payment flow)
     player2 = UserFactory(user_type="player", username="player2_unique")
     PlayerProfileFactory(user=player2)
 
     data_mid = {"team_name": "Mid Tier Team", "player_usernames": [player_user.username, player2.username]}
     response_mid = authenticated_client.post(f"/api/tournaments/{mid_tier.id}/register/", data_mid, format="json")
-    assert response_mid.status_code in [status.HTTP_201_CREATED, status.HTTP_400_BAD_REQUEST]
+    assert response_mid.status_code in [status.HTTP_200_OK, status.HTTP_201_CREATED, status.HTTP_400_BAD_REQUEST]
 
 
 # ============================================================================
@@ -187,7 +187,8 @@ def test_free_and_paid_tournaments_coexist(authenticated_client, player_user, ho
 
     data_paid = {"team_name": "Paid Team", "player_usernames": [player2.username]}
     response_paid = client2.post(f"/api/tournaments/{paid_tournament.id}/register/", data_paid, format="json")
-    assert response_paid.status_code in [status.HTTP_201_CREATED, status.HTTP_400_BAD_REQUEST]
+    # Paid tournaments trigger payment flow (200) or succeed/fail
+    assert response_paid.status_code in [status.HTTP_200_OK, status.HTTP_201_CREATED, status.HTTP_400_BAD_REQUEST]
 
 
 @pytest.mark.django_db
@@ -232,9 +233,8 @@ def test_cannot_register_without_payment_for_paid_tournament(authenticated_clien
 
     response = authenticated_client.post(f"/api/tournaments/{tournament.id}/register/", data, format="json")
 
-    # Should either succeed (if payment not required at registration)
-    # or fail (if payment required)
-    assert response.status_code in [status.HTTP_201_CREATED, status.HTTP_400_BAD_REQUEST]
+    # Paid tournaments trigger payment flow (200), succeed (201), or fail (400)
+    assert response.status_code in [status.HTTP_200_OK, status.HTTP_201_CREATED, status.HTTP_400_BAD_REQUEST]
 
 
 @pytest.mark.django_db
