@@ -107,8 +107,9 @@ class TournamentSerializer(serializers.ModelSerializer):
         return attrs
 
     def to_representation(self, instance):
-        """Custom representation to ensure default banner fallback"""
+        """Custom representation to ensure default banner fallback and proper tournament_file handling"""
         data = super().to_representation(instance)
+
         # Check if banner_image is null in the model instance
         if not instance.banner_image:
             default_banner_path = instance.get_default_banner_path()
@@ -120,6 +121,11 @@ class TournamentSerializer(serializers.ModelSerializer):
                     data["banner_image"] = request.build_absolute_uri(f"{settings.MEDIA_URL}{default_banner_path}")
                 else:
                     data["banner_image"] = f"{settings.MEDIA_URL}{default_banner_path}"
+
+        # Ensure tournament_file is null when not uploaded (no default fallback)
+        if not instance.tournament_file:
+            data["tournament_file"] = None
+
         return data
 
 
