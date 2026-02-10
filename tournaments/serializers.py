@@ -4,7 +4,7 @@ from django.conf import settings
 
 from rest_framework import serializers
 
-from accounts.models import PlayerProfile, Team, TeamMember, User
+from accounts.models import PlayerProfile, Team, TeamMember, TeamJoinRequest, User
 from accounts.serializers import HostProfileSerializer, PlayerProfileSerializer
 from tournaments.models import HostRating, Match, MatchScore, Tournament, TournamentRegistration
 
@@ -19,6 +19,8 @@ class TournamentSerializer(serializers.ModelSerializer):
         max_length=None, use_url=True, required=False, allow_null=True, allow_empty_file=True
     )
     rounds = serializers.JSONField(required=False)
+    placement_points = serializers.JSONField(required=False)
+    prize_distribution = serializers.JSONField(required=False)
 
     class Meta:
         model = Tournament
@@ -91,6 +93,32 @@ class TournamentSerializer(serializers.ModelSerializer):
             else:
                 if "qualifying_teams" not in round_data:
                     raise serializers.ValidationError(f"Round {i+1} must have 'qualifying_teams' field")
+
+        return value
+
+    def validate_placement_points(self, value):
+        """Ensure placement_points is a valid JSON/dict"""
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                raise serializers.ValidationError("Invalid JSON format for placement_points")
+
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("placement_points must be an object/dictionary")
+
+        return value
+
+    def validate_prize_distribution(self, value):
+        """Ensure prize_distribution is a valid JSON/dict"""
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                raise serializers.ValidationError("Invalid JSON format for prize_distribution")
+
+        if not isinstance(value, dict):
+            raise serializers.ValidationError("prize_distribution must be an object/dictionary")
 
         return value
 
@@ -465,6 +493,9 @@ class MatchSerializer(serializers.ModelSerializer):
             "match_id",
             "match_password",
             "status",
+            "scheduled_date",
+            "scheduled_time",
+            "map_name",
             "started_at",
             "ended_at",
             "created_at",
@@ -494,3 +525,107 @@ class MatchSerializer(serializers.ModelSerializer):
     def get_can_cancel(self, obj):
         can_cancel, _ = obj.can_cancel_match()
         return can_cancel
+
+
+class TournamentRegistrationInitSerializer(serializers.Serializer):
+    """
+    Serializer for initiating tournament registration with email invites.
+    This is the first step before payment is completed.
+    
+    POST /api/tournaments/<tournament_id>/register-init/
+    
+    Expected data:
+    {
+        "team_name": "Alpha Squad",
+        "teammate_emails": ["player2@example.com", "player3@example.com", "player4@example.com"]
+    }
+    """
+    team_name = serializers.CharField(max_length=255, required=True)
+    teammate_emails = serializers.ListField(
+        child=serializers.EmailField(),
+        required=True,
+        help_text="List of exactly 3 teammate email addresses"
+    )
+    
+    def validate_team_name(self, value):
+        """Validate team name is not empty and meets minimum length."""
+        if not value or len(value.strip()) < 3:
+            raise serializers.ValidationError("Team name must be at least 3 characters long.")
+        return value.strip()
+    
+    def validate_teammate_emails(self, value):
+        """Validate that exactly 3 unique emails are provided."""
+        if len(value) != 3:
+            raise serializers.ValidationError(f"Must invite exactly 3 teammates, got {len(value)}.")
+        
+        # Normalize emails to lowercase
+        normalized_emails = [email.lower() for email in value]
+        
+        # Check for duplicates
+        if len(normalized_emails) != len(set(normalized_emails)):
+            raise serializers.ValidationError("Duplicate emails are not allowed in the invite list.")
+        
+        return normalized_emails
+    
+    def validate(self, attrs):
+        """Root level validation."""
+        request = self.context.get('request')
+        tournament_id = self.context.get('tournament_id')
+        
+        if not request or not tournament_id:
+            raise serializers.ValidationError("Missing request context or tournament_id.")
+        
+        # Verify tournament exists
+        from tournaments.models import Tournament
+        try:
+            tournament = Tournament.objects.get(id=tournament_id)
+        except Tournament.DoesNotExist:
+            raise serializers.ValidationError({"error": "Tournament not found."})
+        
+        # Check if registration window is open
+        from django.utils import timezone
+        now = timezone.now()
+        if now < tournament.registration_start:
+            raise serializers.ValidationError({"error": "Registration has not started yet."})
+        if now > tournament.registration_end:
+            raise serializers.ValidationError({"error": "Registration has ended."})
+        
+        # Check if tournament is full
+        if tournament.current_participants >= tournament.max_participants:
+            raise serializers.ValidationError({"error": "Tournament is full."})
+        
+        # Check if captain (current user) is already registered
+        from accounts.models import PlayerProfile
+        player_profile = request.user.player_profile
+        existing = TournamentRegistration.objects.filter(
+            tournament=tournament,
+            player=player_profile
+        ).exclude(status="rejected").first()
+        
+        if existing:
+            raise serializers.ValidationError(
+                {"error": "You are already registered for this tournament."}
+            )
+        
+        # Verify that captain's email is not in the teammate emails
+        captain_email = request.user.email.lower()
+        teammate_emails = attrs['teammate_emails']
+        if captain_email in teammate_emails:
+            raise serializers.ValidationError(
+                {"teammate_emails": "Captain's email cannot be in the teammate list."}
+            )
+        
+        # Check that each teammate email is not already invited to this tournament
+        for email in teammate_emails:
+            existing_invite = TeamJoinRequest.objects.filter(
+                invited_email=email.lower(),
+                tournament_registration__tournament=tournament,
+                status__in=['pending', 'accepted']
+            ).exists()
+            
+            if existing_invite:
+                raise serializers.ValidationError(
+                    {"teammate_emails": f"{email} is already invited to this tournament."}
+                )
+        
+        return attrs

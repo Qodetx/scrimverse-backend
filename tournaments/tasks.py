@@ -14,12 +14,13 @@ from django.utils import timezone
 from celery import shared_task
 from PIL import Image
 
-from accounts.models import HostProfile, PlayerProfile, Team, TeamStatistics
+from accounts.models import HostProfile, PlayerProfile, Team, TeamJoinRequest, TeamStatistics
 from payments.models import Payment
 from scrimverse.email_utils import (
     send_host_approved_email,
     send_player_tournament_reminder_email,
     send_registration_limit_reached_email,
+    send_team_invite_email,
     send_tournament_completed_email,
     send_tournament_created_email,
     send_tournament_registration_email,
@@ -82,6 +83,65 @@ def cleanup_unpaid_tournaments_and_registrations():
         "payments_deleted": count,
         "timestamp": now.isoformat(),
     }
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def send_team_invite_emails_task(self, registration_id):
+    """
+    Send invite emails to all teammates for an invite-based registration.
+    Called after payment is confirmed in process_successful_registration().
+    """
+    try:
+        registration = TournamentRegistration.objects.select_related(
+            "tournament", "player__user", "team"
+        ).get(id=registration_id)
+    except TournamentRegistration.DoesNotExist:
+        logger.error(f"Registration {registration_id} not found for invite emails")
+        return {"status": "error", "reason": "registration_not_found"}
+
+    tournament = registration.tournament
+    captain_name = registration.player.user.username
+    team_name = registration.team.name if registration.team else registration.team_name
+
+    invites = TeamJoinRequest.objects.filter(
+        tournament_registration=registration,
+        request_type="invite",
+        status="pending",
+    )
+
+    emails_sent = 0
+    errors = []
+
+    for invite in invites:
+        try:
+            success = send_team_invite_email(
+                invited_email=invite.invited_email,
+                captain_name=captain_name,
+                team_name=team_name,
+                tournament_name=tournament.title,
+                game_name=tournament.game_name,
+                prize_pool=f"₹{tournament.prize_pool:,.0f}" if tournament.prize_pool else "N/A",
+                invite_token=invite.invite_token,
+                expires_at=invite.invite_expires_at.strftime("%B %d, %Y at %I:%M %p") if invite.invite_expires_at else "7 days",
+            )
+            if success:
+                emails_sent += 1
+            else:
+                errors.append(invite.invited_email)
+        except Exception as exc:
+            logger.warning(f"Failed to send invite to {invite.invited_email}: {exc}")
+            errors.append(invite.invited_email)
+
+    logger.info(
+        f"Team invite emails for registration {registration_id}: "
+        f"{emails_sent} sent, {len(errors)} failed"
+    )
+
+    # Retry if some emails failed
+    if errors and self.request.retries < self.max_retries:
+        raise self.retry(exc=Exception(f"Failed emails: {errors}"))
+
+    return {"emails_sent": emails_sent, "errors": errors}
 
 
 @shared_task

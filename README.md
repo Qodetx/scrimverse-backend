@@ -1,93 +1,609 @@
-# scrimverse-backend
+Scrimverse Backend
+
+A comprehensive Django REST API backend for managing esports tournaments, scrims, team registrations, payments, and user authentication.
+
+🎯 Overview
+
+Scrimverse Backend is a robust Django-based REST API that powers the Scrimverse platform. It provides complete tournament management, user authentication, payment processing, real-time notifications, and administrative controls for esports competitions.
+
+✨ Key Features
+
+
+🏆 Tournament & Scrim Management
 
 
 
-## Getting started
+Tournament System: Multi-round, multi-group tournament management with qualification rounds
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+Scrim Mode: Quick practice matches with simplified rules (1 round, max 25 teams, max 6 matches)
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+Match Management: Create, update, and track match results with detailed statistics
 
-## Add your files
+Group & Round Management: Flexible group creation and round progression
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+Leaderboards: Real-time standings and points tracking
 
-```
-cd existing_repo
-git remote add origin https://gitlab.com/sukruth1/scrimverse-backend.git
-git branch -M main
-git push -uf origin main
-```
+Winner Selection: Automated winner determination based on points
 
-## Integrate with your tools
 
-- [ ] [Set up project integrations](https://gitlab.com/sukruth1/scrimverse-backend/-/settings/integrations)
+👥 User & Team Management
 
-## Collaborate with your team
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
 
-## Test and Deploy
+User Roles: Player and Host accounts with role-specific permissions
 
-Use the built-in continuous integration in GitLab.
+Team System: Create teams, manage rosters, handle join requests
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+Host Verification: Admin approval workflow for tournament hosts
 
-***
+Profile Management: Comprehensive user and team profiles with statistics
 
-# Editing this README
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+🔐 Authentication & Security
 
-## Suggestions for a good README
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
 
-## Name
-Choose a self-explaining name for your project.
+JWT Authentication: Secure token-based authentication
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+Google OAuth: Social login integration
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+Email Verification: Email-based account verification
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+Password Reset: Secure password recovery flow
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+Role-based Permissions: Granular access control
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+💳 Payment Integration
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+PhonePe Gateway: Integrated payment processing for tournament registrations
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+Pricing Plans: Basic (₹299), Featured (₹499), Premium (₹799) tiers
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+Payment Tracking: Complete payment history and status tracking
 
-## License
-For open source projects, say how it is licensed.
+Refund Support: Payment refund capabilities
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+
+📧 Email & Notifications
+
+
+
+AWS SES Integration: Reliable email delivery
+
+Celery Tasks: Asynchronous email sending
+
+Email Templates: Professional HTML email templates
+
+Notification System: Tournament updates, match results, and announcements
+
+
+🎨 Media & Storage
+
+
+
+AWS S3 Integration: Cloud storage for banners, profile images, and documents
+
+Local Storage: Development mode file storage
+
+Image Processing: Automatic image optimization
+
+Default Assets: Game-specific default banners
+
+
+⚡ Performance & Caching
+
+
+
+Redis Caching: High-performance data caching
+
+Query Optimization: Efficient database queries with select_related/prefetch_related
+
+Background Tasks: Celery-based async task processing
+
+
+🛠️ Tech Stack
+
+
+
+Framework: Django 5.0.0
+
+API: Django REST Framework 3.14.0
+
+Database: PostgreSQL (production) / SQLite (development)
+
+Authentication: JWT (djangorestframework-simplejwt)
+
+Task Queue: Celery 5.3.4
+
+Cache: Redis 5.0.1
+
+Storage: AWS S3 (boto3, django-storages)
+
+Email: AWS SES
+
+Payment: PhonePe Payment Gateway
+
+OAuth: Google OAuth 2.0
+
+
+📋 Prerequisites
+
+
+Python 3.10 or higher
+PostgreSQL 13+ (for production) or SQLite (for development)
+Redis 6.0+
+pip (Python package manager)
+Virtual environment tool (venv or virtualenv)
+
+
+🚀 Local Setup
+
+1. Clone the Repository
+
+
+git clone https://gitlab.com/sukruth1/scrimverse-backend.git
+cd scrimverse-backend
+
+
+2. Create Virtual Environment
+
+
+python3 -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
+
+3. Install Dependencies
+
+
+pip install -r requirements.txt
+
+
+4. Environment Configuration
+
+Create a .env file in the project root:
+
+# Django Settings
+SECRET_KEY=your-secret-key-here
+DEBUG=True
+ALLOWED_HOSTS=localhost,127.0.0.1
+
+# Database Settings (SQLite for development)
+DB_NAME=scrimverse
+DB_USER=your_db_user
+DB_PASSWORD=your_db_password
+DB_HOST=localhost
+DB_PORT=5432
+
+# Redis Settings
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_DB=0
+REDIS_PASSWORD=
+REDIS_CACHE_TTL=300
+
+# JWT Settings
+JWT_SECRET_KEY=your-jwt-secret-key
+ACCESS_TOKEN_LIFETIME_MINUTES=60
+REFRESH_TOKEN_LIFETIME_DAYS=7
+
+# CORS Settings
+CORS_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+CSRF_TRUSTED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+
+# Google OAuth Settings
+GOOGLE_CLIENT_ID=your-google-client-id
+GOOGLE_CLIENT_SECRET=your-google-client-secret
+
+# AWS S3 Settings (optional for local development)
+USE_S3=False
+AWS_ACCESS_KEY_ID=your-aws-access-key
+AWS_SECRET_ACCESS_KEY=your-aws-secret-key
+AWS_STORAGE_BUCKET_NAME=your-bucket-name
+AWS_S3_REGION_NAME=ap-south-1
+
+# PhonePe Payment Gateway
+CLIENT_ID=your-phonepe-client-id
+CLIENT_VERSION=1
+CLIENT_SECRET=your-phonepe-client-secret
+PHONEPE_ENV=SANDBOX
+PHONEPE_CALLBACK_USERNAME=your-callback-username
+PHONEPE_CALLBACK_PASSWORD=your-callback-password
+
+# Email Configuration (AWS SES)
+EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+EMAIL_HOST=email-smtp.ap-south-1.amazonaws.com
+EMAIL_PORT=587
+EMAIL_USE_TLS=True
+EMAIL_HOST_USER=your-ses-smtp-username
+EMAIL_HOST_PASSWORD=your-ses-smtp-password
+DEFAULT_FROM_EMAIL=hello@scrimverse.com
+SUPPORT_EMAIL=support@scrimverse.com
+ADMIN_EMAIL=admin@scrimverse.com
+
+
+5. Database Setup
+
+
+# Run migrations
+python manage.py migrate
+
+# Create superuser for admin access
+python manage.py createsuperuser
+
+
+6. Start Redis Server
+
+
+# On macOS (using Homebrew)
+brew services start redis
+
+# On Linux
+sudo systemctl start redis
+
+# Verify Redis is running
+redis-cli ping  # Should return "PONG"
+
+
+7. Start Celery Worker (in a new terminal)
+
+
+source .venv/bin/activate
+celery -A scrimverse worker --loglevel=info
+
+
+8. Start Celery Beat (in another new terminal)
+
+
+source .venv/bin/activate
+celery -A scrimverse beat --loglevel=info
+
+
+9. Start Django Development Server
+
+
+python manage.py runserver
+
+
+The API will be available at http://localhost:8000/api/
+10. Access Admin Panel
+
+Navigate to http://localhost:8000/admin/ and login with your superuser credentials.
+
+📁 Project Structure
+
+
+scrimverse-backend/
+├── accounts/              # User authentication & profiles
+│   ├── models.py         # User, Profile, Team models
+│   ├── views.py          # Auth endpoints
+│   ├── serializers.py    # User serializers
+│   ├── admin.py          # Admin customizations
+│   └── tasks.py          # Email tasks
+├── tournaments/           # Tournament & scrim management
+│   ├── models.py         # Tournament, Match, Group models
+│   ├── views.py          # Tournament endpoints
+│   ├── groups_views.py   # Group management
+│   ├── serializers.py    # Tournament serializers
+│   ├── tasks.py          # Background tasks
+│   └── services.py       # Business logic
+├── payments/              # Payment processing
+│   ├── models.py         # Payment, Transaction models
+│   ├── views.py          # Payment endpoints
+│   ├── services.py       # PhonePe integration
+│   └── serializers.py    # Payment serializers
+├── scrimverse/            # Project configuration
+│   ├── settings.py       # Django settings
+│   ├── urls.py           # URL routing
+│   ├── celery.py         # Celery configuration
+│   └── email_utils.py    # Email utilities
+├── templates/             # Email templates
+├── media/                 # Uploaded files (local)
+├── scripts/               # Utility scripts
+├── tests/                 # Test suite
+├── manage.py              # Django management script
+└── requirements.txt       # Python dependencies
+
+
+
+🔌 API Endpoints
+
+Authentication
+
+
+
+POST /api/accounts/register/ - User registration
+
+POST /api/accounts/login/ - User login
+
+POST /api/accounts/token/refresh/ - Refresh JWT token
+
+POST /api/accounts/google-auth/ - Google OAuth login
+
+POST /api/accounts/verify-email/ - Email verification
+
+POST /api/accounts/password-reset/ - Password reset request
+
+POST /api/accounts/password-reset-confirm/ - Password reset confirmation
+
+User & Team Management
+
+
+
+GET /api/accounts/profile/ - Get user profile
+
+PUT /api/accounts/profile/ - Update user profile
+
+POST /api/accounts/teams/ - Create team
+
+GET /api/accounts/teams/ - List user teams
+
+POST /api/accounts/teams/{id}/join-request/ - Request to join team
+
+GET /api/accounts/leaderboard/ - Global leaderboard
+
+Tournaments
+
+
+
+GET /api/tournaments/ - List tournaments
+
+POST /api/tournaments/ - Create tournament (Host only)
+
+GET /api/tournaments/{id}/ - Tournament details
+
+PUT /api/tournaments/{id}/ - Update tournament (Host only)
+
+POST /api/tournaments/{id}/register/ - Register for tournament
+
+POST /api/tournaments/{id}/start/ - Start tournament (Host only)
+
+GET /api/tournaments/{id}/standings/ - Tournament standings
+
+POST /api/tournaments/{id}/select-winner/ - Select winner (Host only)
+
+Scrims
+
+
+
+GET /api/scrims/ - List scrims
+
+POST /api/scrims/ - Create scrim (Host only)
+
+GET /api/scrims/{id}/ - Scrim details
+
+POST /api/scrims/{id}/register/ - Register for scrim
+
+Matches & Groups
+
+
+
+GET /api/tournaments/{id}/matches/ - List matches
+
+POST /api/tournaments/{id}/matches/ - Create match (Host only)
+
+PUT /api/matches/{id}/ - Update match results (Host only)
+
+GET /api/tournaments/{id}/groups/ - List groups
+
+POST /api/tournaments/{id}/groups/ - Create group (Host only)
+
+Payments
+
+
+
+POST /api/payments/initiate/ - Initiate payment
+
+POST /api/payments/callback/ - Payment callback (PhonePe)
+
+GET /api/payments/status/{transaction_id}/ - Check payment status
+
+GET /api/payments/history/ - Payment history
+
+Admin
+
+
+
+GET /api/admin/stats/ - Platform statistics
+
+GET /api/admin/users/ - User management
+
+POST /api/admin/approve-host/{id}/ - Approve host verification
+
+
+🧪 Testing
+
+
+# Run all tests
+pytest
+
+# Run with coverage
+pytest --cov=. --cov-report=html
+
+# Run specific test file
+pytest tests/test_tournaments.py
+
+# Run tests in CI mode
+pytest --cov --cov-report=xml --cov-report=term
+
+
+
+🔧 Development Tools
+
+Code Quality
+
+
+# Format code with Black
+black .
+
+# Sort imports with isort
+isort .
+
+# Lint with flake8
+flake8 .
+
+# Security check with Bandit
+bandit -r .
+
+# Run all pre-commit hooks
+pre-commit run --all-files
+
+
+Database Management
+
+
+# Create new migration
+python manage.py makemigrations
+
+# Apply migrations
+python manage.py migrate
+
+# Reset database (development only)
+python manage.py flush
+
+# Load sample data
+python manage.py loaddata fixtures/sample_data.json
+
+
+Utility Scripts
+
+
+# Generate comprehensive test data
+python scripts/generate_comprehensive_data.py
+
+# Cleanup test accounts
+python scripts/cleanup_test_accounts.py
+
+
+
+🐳 Docker Support (Optional)
+
+
+# Build and run with Docker Compose
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop services
+docker-compose down
+
+
+
+🌍 Deployment
+
+Production Checklist
+
+
+Set DEBUG=False in .env
+
+Configure production database (PostgreSQL)
+Set up AWS S3 for media storage (USE_S3=True)
+Configure AWS SES for email
+Set strong SECRET_KEY and JWT_SECRET_KEY
+
+Update ALLOWED_HOSTS with production domain
+Configure CORS for production frontend URL
+Set up SSL/TLS certificates
+Configure Redis for production
+Set up Celery with supervisor or systemd
+Use Gunicorn/uWSGI for WSGI server
+Set up Nginx as reverse proxy
+
+Environment Variables for Production
+
+Ensure all sensitive credentials are properly set in production environment.
+
+📊 Admin Portal Features
+
+Access the Django admin at /admin/ to:
+
+
+User Management: View, edit, and manage user accounts
+
+Host Verification: Approve or reject host applications
+
+Tournament Oversight: Monitor and manage all tournaments
+
+Payment Tracking: View payment transactions and status
+
+Team Management: Manage teams and rosters
+
+Content Moderation: Review and moderate user-generated content
+
+Analytics: View platform statistics and insights
+
+
+🤝 Contributing
+
+
+Fork the repository
+Create a feature branch (git checkout -b feature/amazing-feature)
+Commit your changes (git commit -m 'Add amazing feature')
+Push to the branch (git push origin feature/amazing-feature)
+Open a Merge Request
+
+
+📝 License
+
+This project is proprietary and confidential.
+
+👥 Team
+
+
+
+Development Team: Scrimverse Backend Team
+
+Contact: support@scrimverse.com
+
+
+
+🐛 Troubleshooting
+
+Common Issues
+
+Redis Connection Error
+
+# Make sure Redis is running
+redis-cli ping
+# If not running, start Redis
+brew services start redis  # macOS
+sudo systemctl start redis  # Linux
+
+
+Database Migration Issues
+
+# Reset migrations (development only)
+python manage.py migrate --fake-initial
+
+
+Celery Not Processing Tasks
+
+# Check Celery worker is running
+celery -A scrimverse inspect active
+
+# Restart Celery worker
+pkill -f 'celery worker'
+celery -A scrimverse worker --loglevel=info
+
+
+Port Already in Use
+
+# Kill process on port 8000
+lsof -ti:8000 | xargs kill -9
+
+
+
+📚 Additional Resources
+
+
+Django Documentation
+Django REST Framework
+Celery Documentation
+Redis Documentation
+AWS S3 Documentation
+
+
+Happy Coding! 🚀

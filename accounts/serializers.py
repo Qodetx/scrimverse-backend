@@ -416,3 +416,21 @@ class TeamStatisticsSerializer(serializers.ModelSerializer):
             "total_points",
             "last_updated",
         )
+
+# ============================================================================
+# TEAM INVITE SERIALIZER (Invite-Based Registration Flow)
+# ============================================================================
+
+
+class TeamInviteDetailSerializer(serializers.Serializer):
+    """
+    Public serializer for displaying team invite details on the frontend.
+    Used by guests to see who invited them before accepting/declining.
+    """
+
+    team_name = serializers.CharField(read_only=True)
+    captain_name = serializers.CharField(read_only=True)
+    tournament_name = serializers.CharField(read_only=True)
+    status = serializers.CharField(read_only=True)
+    invited_email = serializers.EmailField(read_only=True)
+    invite_expires_at = serializers.DateTimeField(read_only=True)

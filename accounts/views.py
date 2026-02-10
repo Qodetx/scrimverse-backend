@@ -22,6 +22,7 @@ from accounts.serializers import (
     LoginSerializer,
     PlayerProfileSerializer,
     PlayerRegistrationSerializer,
+    TeamInviteDetailSerializer,
     TeamJoinRequestSerializer,
     TeamMemberSerializer,
     TeamSerializer,
@@ -1339,3 +1340,230 @@ class TeamViewSet(viewsets.ModelViewSet):
             )
 
         return Response(tournaments_data, status=status.HTTP_200_OK)
+
+# ============================================================================
+# TEAM INVITE ENDPOINTS (Invite-Based Registration Flow)
+# ============================================================================
+
+
+class RetrieveInviteDetailsView(APIView):
+    """
+    Retrieve invite details before accepting/declining.
+    GET /api/accounts/invites/<token>/
+    
+    Permission: AllowAny (guests can view invite details)
+    """
+
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, token):
+        """
+        Retrieve invite details by token.
+        Returns safe public data about the team and tournament.
+        """
+        try:
+            invite = TeamJoinRequest.objects.select_related(
+                "team", "tournament_registration__tournament", "tournament_registration__player__user"
+            ).get(invite_token=token, request_type="invite")
+        except TeamJoinRequest.DoesNotExist:
+            return Response(
+                {"error": "Invite not found or invalid token"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Check if expired
+        if invite.invite_expires_at and timezone.now() > invite.invite_expires_at:
+            invite.status = "expired"
+            invite.save(update_fields=["status"])
+            return Response(
+                {"error": "This invite has expired", "status": "expired"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Return safe public data
+        registration = invite.tournament_registration
+        tournament = registration.tournament if registration else None
+
+        response_data = {
+            "team_name": invite.team.name,
+            "captain_name": registration.player.user.username if registration else "Unknown",
+            "tournament_name": tournament.title if tournament else "Unknown",
+            "status": invite.status,
+            "invited_email": invite.invited_email,
+            "invite_expires_at": invite.invite_expires_at,
+        }
+
+        serializer = TeamInviteDetailSerializer(response_data)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class AcceptInviteView(APIView):
+    """
+    Accept invite and join the team.
+    POST /api/accounts/invites/<token>/accept/
+    
+    Permission: IsAuthenticated (user must be logged in)
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, token):
+        """
+        Accept invite, add user to team, and update registration status.
+        """
+        user = request.user
+
+        try:
+            invite = TeamJoinRequest.objects.select_related(
+                "team", "tournament_registration__tournament"
+            ).get(invite_token=token, request_type="invite")
+        except TeamJoinRequest.DoesNotExist:
+            return Response(
+                {"error": "Invite not found or invalid token"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Check if expired
+        if invite.invite_expires_at and timezone.now() > invite.invite_expires_at:
+            invite.status = "expired"
+            invite.save(update_fields=["status"])
+            return Response(
+                {"error": "This invite has expired", "status": "expired"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Validate email matches
+        if user.email.lower() != invite.invited_email.lower():
+            logger.warning(
+                f"Email mismatch for invite {token}: user={user.email}, invited={invite.invited_email}"
+            )
+            return Response(
+                {
+                    "error": "Your email does not match the invited email. Please log in with the correct account.",
+                    "invited_email": invite.invited_email,
+                    "your_email": user.email,
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # ================================================================
+        # ACCEPT LOGIC (within atomic transaction)
+        # ================================================================
+        from django.db import transaction
+
+        with transaction.atomic():
+            # 1. Update TeamJoinRequest
+            invite.status = "accepted"
+            invite.player = user
+            invite.save(update_fields=["status", "player", "updated_at"])
+
+            logger.info(f"Invite {token} accepted by user {user.username}")
+
+            # 2. Add user to team (create/update TeamMember)
+            team = invite.team
+            team_member, created = TeamMember.objects.get_or_create(
+                team=team,
+                username=user.username,
+                defaults={
+                    "user": user,
+                    "is_captain": False,
+                },
+            )
+            if not created and not team_member.user:
+                # Update the link if we're filling it in for the first time
+                team_member.user = user
+                team_member.save(update_fields=["user"])
+
+            logger.info(f"User {user.username} added to team {team.name}")
+
+            # 3. Update TournamentRegistration.invited_members_status
+            registration = invite.tournament_registration
+            if registration:
+                if not registration.invited_members_status:
+                    registration.invited_members_status = {}
+
+                # Find the entry matching this email and update it
+                for email_key, member_status in registration.invited_members_status.items():
+                    if email_key.lower() == invite.invited_email.lower():
+                        member_status["status"] = "accepted"
+                        member_status["username"] = user.username
+                        break
+
+                registration.save(update_fields=["invited_members_status", "updated_at"])
+                logger.info(
+                    f"Registration {registration.id} updated: {invite.invited_email} accepted by {user.username}"
+                )
+
+        return Response(
+            {
+                "success": True,
+                "message": f"Successfully accepted invite and joined {team.name}!",
+                "team_id": team.id,
+                "team_name": team.name,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class DeclineInviteView(APIView):
+    """
+    Decline invite without joining the team.
+    POST /api/accounts/invites/<token>/decline/
+    
+    Permission: AllowAny (allow declining without login)
+    """
+
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request, token):
+        """
+        Decline invite and mark as rejected.
+        """
+        try:
+            invite = TeamJoinRequest.objects.select_related(
+                "tournament_registration__tournament"
+            ).get(invite_token=token, request_type="invite")
+        except TeamJoinRequest.DoesNotExist:
+            return Response(
+                {"error": "Invite not found or invalid token"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # ================================================================
+        # DECLINE LOGIC
+        # ================================================================
+        from django.db import transaction
+
+        with transaction.atomic():
+            # 1. Update TeamJoinRequest status
+            invite.status = "rejected"
+            invite.save(update_fields=["status", "updated_at"])
+
+            logger.info(f"Invite {token} declined")
+
+            # 2. Update TournamentRegistration.invited_members_status
+            registration = invite.tournament_registration
+            if registration:
+                if not registration.invited_members_status:
+                    registration.invited_members_status = {}
+
+                # Find the entry matching this email and update it
+                for email_key, member_status in registration.invited_members_status.items():
+                    if email_key.lower() == invite.invited_email.lower():
+                        member_status["status"] = "declined"
+                        # username stays None since they declined
+                        break
+
+                registration.save(update_fields=["invited_members_status", "updated_at"])
+                logger.info(
+                    f"Registration {registration.id} updated: {invite.invited_email} declined invite"
+                )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Invite declined successfully",
+                "invited_email": invite.invited_email,
+            },
+            status=status.HTTP_200_OK,
+        )

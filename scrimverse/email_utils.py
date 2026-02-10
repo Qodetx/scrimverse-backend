@@ -346,3 +346,57 @@ def send_tournament_completed_email(
         context=context,
         recipient_list=[host_email],
     )
+
+
+# ============================================================================
+# TEAM INVITE EMAILS  (Invite-Based Registration Flow)
+# ============================================================================
+
+
+def send_team_invite_email(
+    invited_email: str,
+    captain_name: str,
+    team_name: str,
+    tournament_name: str,
+    game_name: str,
+    prize_pool: str,
+    invite_token: str,
+    expires_at: str,
+) -> bool:
+    """
+    Send team invitation email to an invited player.
+
+    The link should point to the frontend route that will:
+    - Show team/tournament details
+    - Prompt signup/login if the user is not registered
+    - Let the user accept or decline the invite
+
+    Args:
+        invited_email: Recipient email address
+        captain_name: Username of the captain who is inviting
+        team_name: Name of the team
+        tournament_name: Name of the tournament
+        game_name: Game (e.g. BGMI, Free Fire)
+        prize_pool: Prize pool display string (e.g. "₹10,000")
+        invite_token: Unique invite token for the link
+        expires_at: Human-readable expiry string
+    """
+    frontend_url = settings.CORS_ALLOWED_ORIGINS[0] if settings.CORS_ALLOWED_ORIGINS else "http://localhost:3000"
+    accept_link = f"{frontend_url}/join-team/{invite_token}"
+
+    context = {
+        "invited_email": invited_email,
+        "captain_name": captain_name,
+        "team_name": team_name,
+        "tournament_name": tournament_name,
+        "game_name": game_name,
+        "prize_pool": prize_pool,
+        "accept_link": accept_link,
+        "expires_at": expires_at,
+    }
+    return EmailService.send_email(
+        subject=f"You're invited to join {team_name} for {tournament_name}!",
+        template_name="team_invitation",
+        context=context,
+        recipient_list=[invited_email],
+    )

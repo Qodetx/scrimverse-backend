@@ -34,6 +34,7 @@ from tournaments.tasks import (
     update_leaderboard,
     update_platform_statistics,
 )
+from django.utils.dateparse import parse_date, parse_time
 
 logger = logging.getLogger(__name__)
 
@@ -400,6 +401,103 @@ class TournamentDeleteView(generics.DestroyAPIView):
         cache.delete("tournaments:list:all")
 
 
+class BulkScheduleUpdateView(APIView):
+    """Bulk update scheduling fields on matches for a tournament (Host only).
+
+    PUT /api/tournaments/<pk>/bulk-schedule/
+
+    Expected payload: [
+        {"match_id": 101, "scheduled_date": "2026-02-10", "scheduled_time": "18:30:00", "map_name": "Erangel"},
+        ...
+    ]
+    """
+
+    permission_classes = [IsHostUser]
+
+    def put(self, request, pk, *args, **kwargs):
+        data = request.data
+
+        # Accept either a top-level JSON array or an object containing a 'schedules' array
+        if isinstance(data, list):
+            data_list = data
+        elif isinstance(data, dict) and isinstance(data.get("schedules"), list):
+            data_list = data.get("schedules")
+        else:
+            # Sometimes DRF may parse body as a string or other form; attempt to parse raw body
+            try:
+                raw = request.body.decode("utf-8")
+                parsed = json.loads(raw) if raw else None
+                if isinstance(parsed, list):
+                    data_list = parsed
+                elif isinstance(parsed, dict) and isinstance(parsed.get("schedules"), list):
+                    data_list = parsed.get("schedules")
+                else:
+                    return Response({"error": "Expected a list of match updates"}, status=status.HTTP_400_BAD_REQUEST)
+            except Exception:
+                return Response({"error": "Expected a list of match updates"}, status=status.HTTP_400_BAD_REQUEST)
+
+        updated = []
+        errors = []
+
+        # Verify tournament exists and ownership
+        try:
+            tournament = Tournament.objects.get(id=pk)
+        except Tournament.DoesNotExist:
+            return Response({"error": "Tournament not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if tournament.host != request.user.host_profile:
+            return Response({"error": "You do not have permission to modify this tournament"}, status=403)
+
+        for idx, item in enumerate(data_list):
+            match_id = item.get("match_id") or item.get("id")
+            if not match_id:
+                errors.append({"index": idx, "error": "match_id is required"})
+                continue
+
+            try:
+                match = Match.objects.get(id=match_id)
+            except Match.DoesNotExist:
+                errors.append({"index": idx, "match_id": match_id, "error": "Match not found"})
+                continue
+
+            # Ensure match belongs to tournament and host
+            if match.group.tournament.id != tournament.id:
+                errors.append({"index": idx, "match_id": match_id, "error": "Match does not belong to this tournament"})
+                continue
+
+            # Parse and set fields
+            sd = item.get("scheduled_date")
+            st = item.get("scheduled_time")
+            map_name = item.get("map_name")
+
+            if sd is not None:
+                parsed_date = parse_date(sd) if isinstance(sd, str) else sd
+                if parsed_date is None:
+                    errors.append({"index": idx, "match_id": match_id, "error": "Invalid scheduled_date"})
+                    continue
+                match.scheduled_date = parsed_date
+
+            if st is not None:
+                parsed_time = parse_time(st) if isinstance(st, str) else st
+                if parsed_time is None:
+                    errors.append({"index": idx, "match_id": match_id, "error": "Invalid scheduled_time"})
+                    continue
+                match.scheduled_time = parsed_time
+
+            if map_name is not None:
+                match.map_name = str(map_name)
+
+            # Save the match
+            try:
+                match.save()
+                updated.append(match.id)
+            except Exception as e:
+                errors.append({"index": idx, "match_id": match_id, "error": str(e)})
+
+        result = {"updated_count": len(updated), "updated_ids": updated, "errors": errors}
+        return Response(result, status=status.HTTP_200_OK)
+
+
 class HostTournamentsView(generics.ListAPIView):
     """
     Get all tournaments by a specific host
@@ -415,6 +513,102 @@ class HostTournamentsView(generics.ListAPIView):
 
 
 # ============= Registration Views =============
+
+
+class TournamentRegistrationInitiateView(APIView):
+    """
+    Initiate tournament registration with email-based team invites.
+    
+    This is the FIRST STEP in the new invite-based registration flow:
+    - Captain enters team name and invites 3 teammates via email
+    - Registration record is created with status='pending_payment'
+    - No payment initiated yet, just stores the registration data
+    - Frontend will then proceed to payment page
+    
+    POST /api/tournaments/<tournament_id>/register-init/
+    
+    Request:
+    {
+        "team_name": "Alpha Squad",
+        "teammate_emails": ["player2@example.com", "player3@example.com", "player4@example.com"]
+    }
+    
+    Response:
+    {
+        "success": true,
+        "registration_id": 123,
+        "status": "pending_payment",
+        "team_name": "Alpha Squad",
+        "invited_emails": ["player2@example.com", "player3@example.com", "player4@example.com"],
+        "entry_fee": "500.00",
+        "message": "Registration initiated. Proceed to payment to confirm."
+    }
+    """
+    
+    permission_classes = [IsPlayerUser]
+    
+    def post(self, request, tournament_id):
+        """Initialize a registration with email invites."""
+        
+        # Get serializer context
+        serializer_context = {
+            'request': request,
+            'tournament_id': tournament_id
+        }
+        
+        # Validate input using the serializer
+        from tournaments.serializers import TournamentRegistrationInitSerializer
+        serializer = TournamentRegistrationInitSerializer(data=request.data, context=serializer_context)
+        
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Get validated data
+        validated_data = serializer.validated_data
+        team_name = validated_data['team_name']
+        teammate_emails = validated_data['teammate_emails']  # Already normalized to lowercase
+        
+        try:
+            # Get player profile
+            player_profile = request.user.player_profile
+            
+            # Get tournament
+            tournament = Tournament.objects.get(id=tournament_id)
+            
+            # Create TournamentRegistration with new status 'pending_payment'
+            # (Note: if status doesn't exist in choices, we use an appropriate existing status)
+            registration = TournamentRegistration.objects.create(
+                tournament=tournament,
+                player=player_profile,
+                team_name=team_name,
+                status='pending',  # Using 'pending' as interim status
+                payment_status=False,
+                temp_teammate_emails=teammate_emails,  # Store emails temporarily
+                is_team_created=False,
+                invited_members_status={email: {'status': 'pending', 'username': None} for email in teammate_emails}
+            )
+            
+            logger.info(
+                f"Tournament registration initiated - Player: {request.user.id}, "
+                f"Tournament: {tournament_id}, Registration: {registration.id}"
+            )
+            
+            return Response({
+                'success': True,
+                'registration_id': registration.id,
+                'status': registration.status,
+                'team_name': registration.team_name,
+                'invited_emails': teammate_emails,
+                'entry_fee': str(tournament.entry_fee),
+                'tournament_name': tournament.title,
+                'message': 'Registration initiated. Proceed to payment to confirm.'
+            }, status=status.HTTP_201_CREATED)
+        
+        except Tournament.DoesNotExist:
+            return Response({'error': 'Tournament not found'}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as e:
+            logger.error(f"Error initiating registration: {str(e)}")
+            return Response({'error': 'Internal server error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class TournamentRegistrationCreateView(generics.CreateAPIView):

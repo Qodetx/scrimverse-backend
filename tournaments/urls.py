@@ -32,9 +32,11 @@ from tournaments.views import (  # Tournament URLs; Registration URLs; Rating UR
     TournamentDetailView,
     TournamentListView,
     TournamentRegistrationCreateView,
+    TournamentRegistrationInitiateView,
     TournamentRegistrationsView,
     TournamentStatsView,
     TournamentUpdateView,
+    BulkScheduleUpdateView,
     UpdateTeamStatusView,
     UpdateTournamentFieldsView,
 )
@@ -51,8 +53,10 @@ urlpatterns = [
     path("create/", TournamentCreateView.as_view(), name="tournament-create"),
     path("<int:pk>/update/", TournamentUpdateView.as_view(), name="tournament-update"),
     path("<int:pk>/delete/", TournamentDeleteView.as_view(), name="tournament-delete"),
+    path("<int:pk>/bulk-schedule/", BulkScheduleUpdateView.as_view(), name="tournament-bulk-schedule"),
     path("host/<int:host_id>/", HostTournamentsView.as_view(), name="host-tournaments"),
-    # Tournament Registration
+    # Tournament Registration - NEW INVITE-BASED FLOW
+    path("<int:tournament_id>/register-init/", TournamentRegistrationInitiateView.as_view(), name="tournament-register-init"),
     path("<int:tournament_id>/register/", TournamentRegistrationCreateView.as_view(), name="tournament-register"),
     path("my-registrations/", PlayerTournamentRegistrationsView.as_view(), name="my-tournament-registrations"),
     path(

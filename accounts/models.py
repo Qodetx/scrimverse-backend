@@ -214,6 +214,7 @@ class TeamJoinRequest(models.Model):
         ("pending", "Pending"),
         ("accepted", "Accepted"),
         ("rejected", "Rejected"),
+        ("expired", "Expired"),
     )
 
     TYPE_CHOICES = (
@@ -222,11 +223,17 @@ class TeamJoinRequest(models.Model):
     )
 
     team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="join_requests")
-    player = models.ForeignKey(User, on_delete=models.CASCADE, related_name="team_join_requests")
+    player = models.ForeignKey(User, on_delete=models.CASCADE, related_name="team_join_requests", null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
     request_type = models.CharField(max_length=20, choices=TYPE_CHOICES, default="request")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    
+    # NEW FIELDS FOR INVITE-BASED REGISTRATION
+    invite_token = models.CharField(max_length=255, unique=True, null=True, blank=True, db_index=True, help_text="Unique token for email-based invites")
+    invited_email = models.EmailField(null=True, blank=True, help_text="Email address of the invited player")
+    invite_expires_at = models.DateTimeField(null=True, blank=True, help_text="Expiration time for the invite")
+    tournament_registration = models.ForeignKey('tournaments.TournamentRegistration', on_delete=models.CASCADE, null=True, blank=True, related_name='join_requests', help_text="Link to the tournament registration")
 
     def __str__(self):
         return f"{self.player.username} -> {self.team.name} ({self.status})"

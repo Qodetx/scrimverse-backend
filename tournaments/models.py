@@ -145,6 +145,11 @@ class Tournament(models.Model):
         blank=True, null=True, help_text="Extended visibility period end date (Premium plan)"
     )
 
+    # Placement Points Configuration - for dynamic scoring
+    placement_points = models.JSONField(
+        default=dict, blank=True, help_text="Placement points mapping: {rank: points}. Example: {'1': 15, '2': 12, '3': 10}"
+    )
+
     # System Flags
     use_groups_system = models.BooleanField(
         default=True, help_text="Use new groups and matches system (False for legacy tournaments)"
@@ -262,6 +267,11 @@ class TournamentRegistration(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="confirmed")
     payment_status = models.BooleanField(default=False)
     payment_id = models.CharField(max_length=100, blank=True)
+    
+    # NEW FIELDS FOR INVITE-BASED REGISTRATION FLOW
+    temp_teammate_emails = models.JSONField(default=list, blank=True, help_text="Temporary storage of invited teammate emails before payment")
+    is_team_created = models.BooleanField(default=False, help_text="Track if real Team object has been created after payment")
+    invited_members_status = models.JSONField(default=dict, blank=True, help_text="Status of invited members: {email: {status: 'pending'|'accepted'|'declined'|'expired', username: str|null}}")
 
     # Metadata
     registered_at = models.DateTimeField(auto_now_add=True)
@@ -378,6 +388,11 @@ class Match(models.Model):
     started_at = models.DateTimeField(null=True, blank=True)
     ended_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    
+    # NEW FIELDS FOR BULK SCHEDULING
+    scheduled_date = models.DateField(null=True, blank=True, help_text="Scheduled date for this match")
+    scheduled_time = models.TimeField(null=True, blank=True, help_text="Scheduled time for this match")
+    map_name = models.CharField(max_length=100, null=True, blank=True, help_text="Game map name for this match (e.g., Erangel, Miramar)")
 
     class Meta:
         unique_together = ("group", "match_number")

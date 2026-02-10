@@ -25,6 +25,9 @@ from accounts.views import (
     TeamViewSet,
     UploadAadharView,
     UserDetailView,
+    RetrieveInviteDetailsView,
+    AcceptInviteView,
+    DeclineInviteView,
 )
 
 router = DefaultRouter()
@@ -59,6 +62,10 @@ urlpatterns = [
     # Leaderboard
     path("leaderboard/", LeaderboardView.as_view(), name="leaderboard"),
     path("teams/<int:team_id>/rank/", TeamRankView.as_view(), name="team-rank"),
+    # Invites (Invite-Based Registration Flow)
+    path("invites/<str:token>/", RetrieveInviteDetailsView.as_view(), name="invite-details"),
+    path("invites/<str:token>/accept/", AcceptInviteView.as_view(), name="invite-accept"),
+    path("invites/<str:token>/decline/", DeclineInviteView.as_view(), name="invite-decline"),
     # Router URLs (must be last)
     path("", include(router.urls)),
 ]

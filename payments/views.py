@@ -32,6 +32,7 @@ from payments.serializers import (
 )
 from payments.services import phonepe_service
 from tournaments.models import Tournament, TournamentRegistration
+from tournaments.services_registration import process_successful_registration
 from tournaments.tasks import (
     send_registration_limit_reached_email_task,
     send_tournament_created_email_task,
@@ -331,6 +332,31 @@ def check_payment_status(request):
                             cache.delete(f"host:dashboard:{host.id}")
 
                 elif payment.payment_type == "entry_fee":
+                    # ===== INVITE-BASED FLOW (NEW) =====
+                    # Check if this is an invite-based registration (registration_id in udf4)
+                    registration_id = payment.meta_info.get("udf4")
+                    if registration_id:
+                        try:
+                            registration = TournamentRegistration.objects.get(id=int(registration_id))
+                            # If this registration has temp_teammate_emails, it's invite-based
+                            if registration.temp_teammate_emails:
+                                # Call the service to handle invite-based post-payment logic
+                                result = process_successful_registration(registration, merchant_order_id)
+                                logger.info(f"✅ Invite-based registration processed: {registration.id}")
+
+                                # Ensure links in payment
+                                payment.registration = registration
+                                payment.save()
+
+                                # Small success notification
+                                cache.delete("tournaments:list:all")
+                                cache.delete(f"host:dashboard:{registration.tournament.host.id}")
+                        except TournamentRegistration.DoesNotExist:
+                            logger.warning(f"Registration {registration_id} not found for invite-flow")
+                        except Exception as e:
+                            logger.error(f"Error processing invite-based registration: {str(e)}")
+
+                    # ===== LEGACY FLOW (OLD) =====
                     # Get registration data from meta_info (stored separately, not in udf3)
                     reg_data = payment.meta_info.get("registration_data", {})
                     if reg_data:
@@ -785,7 +811,33 @@ def phonepe_callback(request):
                                 cache.delete(f"host:dashboard:{host.id}")
 
                         elif payment.payment_type == "entry_fee":
+                            # ===== INVITE-BASED FLOW (NEW) =====
+                            registration_id = payment.meta_info.get("udf4")
+                            if registration_id:
+                                try:
+                                    registration = TournamentRegistration.objects.get(id=int(registration_id))
+                                    if registration.temp_teammate_emails:
+                                        result = process_successful_registration(registration, merchant_order_id)
+                                        logger.info(f"✅ Invite-based registration processed from webhook: {registration.id}")
+
+                                        payment.registration = registration
+                                        cache.delete("tournaments:list:all")
+                                        cache.delete(f"host:dashboard:{registration.tournament.host.id}")
+                                except TournamentRegistration.DoesNotExist:
+                                    logger.warning(f"Registration {registration_id} not found for invite-flow (webhook)")
+                                except Exception as e:
+                                    logger.error(f"Error processing invite-based registration (webhook): {str(e)}")
+
+                            # ===== LEGACY FLOW (OLD) =====
                             # Get registration data from meta_info (stored separately, not in udf3)
+                            # Initialize legacy variables to avoid UnboundLocalError when reg_data is empty
+                            tournament_id = None
+                            player_id = None
+                            team_id = None
+                            player_usernames = []
+                            team_name = ""
+                            save_as_team = False
+
                             reg_data = payment.meta_info.get("registration_data", {})
                             if reg_data:
                                 tournament_id = reg_data.pop("tournament_id", None)
