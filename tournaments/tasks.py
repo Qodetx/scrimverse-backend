@@ -316,7 +316,8 @@ def update_leaderboard():
     teams_updated = 0
     for team in teams:
         try:
-            stats, _ = TeamStatistics.objects.get_or_create(team=team)
+            # Get or create aggregate stats (game_name='ALL')
+            stats, _ = TeamStatistics.objects.get_or_create(team=team, game_name='ALL')
 
             # 1. Matches Played (tournaments/scrims participated in)
             # Count confirmed registrations for this team in completed events
@@ -386,22 +387,22 @@ def update_leaderboard():
 
     # 4. Assign Ranks
     with transaction.atomic():
-        # Overall Rank
-        overall_stats = TeamStatistics.objects.all().order_by("-total_points", "-tournament_wins", "-scrim_wins")
+        # Overall Rank (only for aggregate 'ALL' stats)
+        overall_stats = TeamStatistics.objects.filter(game_name='ALL').order_by("-total_points", "-tournament_wins", "-scrim_wins")
         for idx, s in enumerate(overall_stats, 1):
             s.rank = idx
             s.save(update_fields=["rank"])
 
-        # Tournament Rank
-        t_stats = TeamStatistics.objects.annotate(
+        # Tournament Rank (only for aggregate 'ALL' stats)
+        t_stats = TeamStatistics.objects.filter(game_name='ALL').annotate(
             t_total=F("tournament_position_points") + F("tournament_kill_points")
         ).order_by("-t_total", "-tournament_wins", "-tournament_kill_points")
         for idx, s in enumerate(t_stats, 1):
             s.tournament_rank = idx
             s.save(update_fields=["tournament_rank"])
 
-        # Scrim Rank
-        s_stats = TeamStatistics.objects.annotate(s_total=F("scrim_position_points") + F("scrim_kill_points")).order_by(
+        # Scrim Rank (only for aggregate 'ALL' stats)
+        s_stats = TeamStatistics.objects.filter(game_name='ALL').annotate(s_total=F("scrim_position_points") + F("scrim_kill_points")).order_by(
             "-s_total", "-scrim_wins", "-scrim_kill_points"
         )
         for idx, s in enumerate(s_stats, 1):

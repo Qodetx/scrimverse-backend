@@ -494,6 +494,41 @@ class BulkScheduleUpdateView(APIView):
             except Exception as e:
                 errors.append({"index": idx, "match_id": match_id, "error": str(e)})
 
+        # If we updated any matches, optionally update tournament start to earliest scheduled match
+        if updated:
+            try:
+                # Look for earliest scheduled match date/time across the tournament
+                from datetime import datetime, time as dtime
+
+                matches_qs = Match.objects.filter(group__tournament=tournament, scheduled_date__isnull=False).order_by('scheduled_date', 'scheduled_time')
+                if matches_qs.exists():
+                    earliest = matches_qs.first()
+                    sd = earliest.scheduled_date
+                    st = earliest.scheduled_time or dtime.min
+                    # Combine into a timezone-aware datetime if possible
+                    try:
+                        from django.utils import timezone
+
+                        dt = datetime.combine(sd, st)
+                        if timezone.is_naive(dt):
+                            dt = timezone.make_aware(dt, timezone.get_current_timezone())
+                        tournament.tournament_start = dt
+                    except Exception:
+                        # Fallback: set naive datetime
+                        tournament.tournament_start = datetime.combine(sd, st)
+
+                    # Also set helper date/time fields if present on model
+                    try:
+                        tournament.tournament_date = sd
+                        tournament.tournament_time = st
+                    except Exception:
+                        pass
+
+                    tournament.save()
+            except Exception:
+                # Don't fail the whole request if updating tournament_start errors
+                pass
+
         result = {"updated_count": len(updated), "updated_ids": updated, "errors": errors}
         return Response(result, status=status.HTTP_200_OK)
 

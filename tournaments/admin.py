@@ -11,6 +11,7 @@ class TournamentAdmin(admin.ModelAdmin):
     list_display = [
         "title",
         "event_mode_badge",
+        "format_badge",
         "game_name",
         "status_badge",
         "participant_info",
@@ -217,6 +218,21 @@ class TournamentAdmin(admin.ModelAdmin):
         )
 
     revenue_display.short_description = "Revenue"
+
+    def format_badge(self, obj):
+        """Display tournament format badge (5v5 or Multi-team)"""
+        if obj.is_5v5_game():
+            return format_html(
+                '<span style="background-color: #9c27b0; color: white; padding: 3px 8px; '
+                'border-radius: 3px; font-size: 11px; font-weight: bold;">🎮 5v5 Lobby</span>'
+            )
+        else:
+            return format_html(
+                '<span style="background-color: #2196f3; color: white; padding: 3px 8px; '
+                'border-radius: 3px; font-size: 11px; font-weight: bold;">🌍 Multi-team</span>'
+            )
+
+    format_badge.short_description = "Format"
 
     def completion_percentage(self, obj):
         """Show tournament completion percentage"""
@@ -719,7 +735,7 @@ class MatchScoreInline(admin.TabularInline):
 class GroupAdmin(admin.ModelAdmin):
     """Enhanced Group Admin with inline match editing"""
 
-    list_display = ["group_name", "tournament", "round_number", "team_count", "status_badge", "created_at"]
+    list_display = ["group_name", "tournament", "round_number", "team_count", "status_badge", "winner_display", "created_at"]
     list_filter = ["status", "round_number", "tournament__event_mode"]
     search_fields = ["group_name", "tournament__title"]
     ordering = ["tournament", "round_number", "group_name"]
@@ -754,6 +770,17 @@ class GroupAdmin(admin.ModelAdmin):
         )
 
     status_badge.short_description = "Status"
+
+    def winner_display(self, obj):
+        """Display group winner"""
+        if obj.winner:
+            return format_html(
+                '<span style="color: #ffc107; font-weight: bold;">🏆 {}</span>',
+                obj.winner.name
+            )
+        return format_html('<span style="color: #6c757d;">-</span>')
+
+    winner_display.short_description = "Winner"
 
     def mark_as_completed(self, request, queryset):
         """Mark selected groups as completed"""
@@ -796,7 +823,7 @@ class GroupAdmin(admin.ModelAdmin):
 class MatchAdmin(admin.ModelAdmin):
     """Enhanced Match Admin with inline score editing"""
 
-    list_display = ["__str__", "group", "match_number", "status_badge", "room_info", "match_time"]
+    list_display = ["__str__", "group", "match_number", "status_badge", "winner_display", "room_info", "match_time"]
     list_filter = ["status", "group__tournament__event_mode"]
     search_fields = ["group__group_name", "match_id", "group__tournament__title"]
     ordering = ["group", "match_number"]
@@ -841,6 +868,17 @@ class MatchAdmin(admin.ModelAdmin):
         )
 
     status_badge.short_description = "Status"
+
+    def winner_display(self, obj):
+        """Display match winner"""
+        if obj.winner:
+            return format_html(
+                '<span style="color: #ffc107; font-weight: bold;">🏆 {}</span>',
+                obj.winner.name
+            )
+        return format_html('<span style="color: #6c757d;">-</span>')
+
+    winner_display.short_description = "Winner"
 
     def room_info(self, obj):
         """Display room ID and password"""

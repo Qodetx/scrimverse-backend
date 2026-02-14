@@ -21,6 +21,10 @@ class TournamentSerializer(serializers.ModelSerializer):
     rounds = serializers.JSONField(required=False)
     placement_points = serializers.JSONField(required=False)
     prize_distribution = serializers.JSONField(required=False)
+    
+    # 5v5-specific fields
+    is_5v5 = serializers.SerializerMethodField()
+    requires_password = serializers.SerializerMethodField()
 
     class Meta:
         model = Tournament
@@ -121,6 +125,14 @@ class TournamentSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("prize_distribution must be an object/dictionary")
 
         return value
+    
+    def get_is_5v5(self, obj):
+        """Check if tournament is a 5v5 game format (Valorant/COD)"""
+        return obj.is_5v5_game()
+    
+    def get_requires_password(self, obj):
+        """Check if tournament requires match passwords"""
+        return obj.requires_password()
 
     def validate(self, attrs):
         """Root level validation for Tournament"""
@@ -303,14 +315,19 @@ class TournamentRegistrationSerializer(serializers.ModelSerializer):
             except Tournament.DoesNotExist:
                 raise serializers.ValidationError({"tournament_id": "Tournament not found"})
 
-            # Determine required team size based on game_mode
-            game_mode = tournament.game_mode
-            required_players = {"Squad": 4, "Duo": 2, "Solo": 1}.get(game_mode, 1)
+            # Determine required team size based on tournament type
+            if tournament.is_5v5_game():
+                required_players = 5
+                mode_name = "5v5"
+            else:
+                game_mode = tournament.game_mode
+                required_players = {"Squad": 4, "Duo": 2, "Solo": 1}.get(game_mode, 1)
+                mode_name = game_mode
 
             if len(player_usernames) != required_players:
                 raise serializers.ValidationError(
                     {
-                        "player_usernames": f"{game_mode} tournament requires exactly {required_players} player(s). "
+                        "player_usernames": f"{mode_name} tournament requires exactly {required_players} player(s). "
                         f"You provided {len(player_usernames)}."
                     }
                 )
@@ -490,6 +507,12 @@ class MatchSerializer(serializers.ModelSerializer):
     can_start = serializers.SerializerMethodField()
     can_end = serializers.SerializerMethodField()
     can_cancel = serializers.SerializerMethodField()
+    
+    # 5v5-specific fields
+    winner = serializers.SerializerMethodField()
+    team_a = serializers.SerializerMethodField()
+    team_b = serializers.SerializerMethodField()
+    is_5v5_match = serializers.SerializerMethodField()
 
     class Meta:
         model = Match
@@ -511,6 +534,10 @@ class MatchSerializer(serializers.ModelSerializer):
             "can_start",
             "can_end",
             "can_cancel",
+            "winner",
+            "team_a",
+            "team_b",
+            "is_5v5_match",
         ]
         read_only_fields = ["id", "status", "started_at", "ended_at", "created_at"]
 
@@ -531,6 +558,39 @@ class MatchSerializer(serializers.ModelSerializer):
     def get_can_cancel(self, obj):
         can_cancel, _ = obj.can_cancel_match()
         return can_cancel
+    
+    def get_winner(self, obj):
+        """Return winner team info if match is completed and has a winner"""
+        if obj.winner:
+            return {
+                "id": obj.winner.id,
+                "team_name": obj.winner.team_name,
+            }
+        return None
+    
+    def get_team_a(self, obj):
+        """Get first team in the group (for 5v5 head-to-head matches)"""
+        teams = list(obj.group.teams.all()[:1])
+        if teams:
+            return {
+                "id": teams[0].id,
+                "team_name": teams[0].team_name,
+            }
+        return None
+    
+    def get_team_b(self, obj):
+        """Get second team in the group (for 5v5 head-to-head matches)"""
+        teams = list(obj.group.teams.all()[1:2])
+        if teams:
+            return {
+                "id": teams[0].id,
+                "team_name": teams[0].team_name,
+            }
+        return None
+    
+    def get_is_5v5_match(self, obj):
+        """Check if this match belongs to a 5v5 tournament (Valorant/COD)"""
+        return obj.group.tournament.is_5v5_game()
 
 
 class TournamentRegistrationInitSerializer(serializers.Serializer):
@@ -550,7 +610,7 @@ class TournamentRegistrationInitSerializer(serializers.Serializer):
     teammate_emails = serializers.ListField(
         child=serializers.EmailField(),
         required=True,
-        help_text="List of exactly 3 teammate email addresses"
+        help_text="List of teammate email addresses (count depends on game mode: 4 for 5v5, 3 for Squad, 1 for Duo)"
     )
     
     def validate_team_name(self, value):
@@ -560,9 +620,31 @@ class TournamentRegistrationInitSerializer(serializers.Serializer):
         return value.strip()
     
     def validate_teammate_emails(self, value):
-        """Validate that exactly 3 unique emails are provided."""
-        if len(value) != 3:
-            raise serializers.ValidationError(f"Must invite exactly 3 teammates, got {len(value)}.")
+        """Validate correct number of teammate emails based on tournament type."""
+        # Get tournament from context to determine required team size
+        tournament_id = self.context.get('tournament_id')
+        
+        if tournament_id:
+            from tournaments.models import Tournament
+            try:
+                tournament = Tournament.objects.get(id=tournament_id)
+                # Determine required teammates based on game type
+                if tournament.is_5v5_game():
+                    required_teammates = 4  # Captain + 4 = 5 total
+                    mode_name = "5v5"
+                else:
+                    # For other games (Squad/Duo/Solo)
+                    game_mode = tournament.game_mode
+                    required_teammates = {"Squad": 3, "Duo": 1, "Solo": 0}.get(game_mode, 3)
+                    mode_name = game_mode
+                
+                if len(value) != required_teammates:
+                    raise serializers.ValidationError(
+                        f"{mode_name} tournament requires exactly {required_teammates} teammate(s). "
+                        f"You provided {len(value)}."
+                    )
+            except Tournament.DoesNotExist:
+                pass  # Will be caught in root validate()
         
         # Normalize emails to lowercase
         normalized_emails = [email.lower() for email in value]

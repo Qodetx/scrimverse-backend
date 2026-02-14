@@ -794,8 +794,8 @@ class TeamAdmin(admin.ModelAdmin):
 class TeamStatisticsAdmin(admin.ModelAdmin):
     """Enhanced Team Statistics Admin"""
 
-    list_display = ["team", "rank_display", "total_points_display", "tournament_stats", "scrim_stats"]
-    list_filter = [("team__created_at", admin.DateFieldListFilter)]
+    list_display = ["team", "game_name", "rank_display", "total_points_display", "tournament_stats", "scrim_stats"]
+    list_filter = ["game_name", ("team__created_at", admin.DateFieldListFilter)]
     search_fields = ["team__name"]
     ordering = ["rank"]
 

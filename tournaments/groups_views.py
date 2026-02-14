@@ -68,6 +68,9 @@ class ConfigureRoundView(generics.GenericAPIView):
                 status=400,
             )
 
+        # Check if this is a 5v5 game (Valorant/COD)
+        is_5v5_game = tournament.is_5v5_game()
+
         # Get configuration from request
         teams_per_group = request.data.get("teams_per_group")
         qualifying_per_group = request.data.get("qualifying_per_group")
@@ -82,6 +85,24 @@ class ConfigureRoundView(generics.GenericAPIView):
                 matches_per_group = tournament.max_matches
             else:
                 matches_per_group = min(int(matches_per_group), 6)
+        elif is_5v5_game:
+            # 5v5 games (Valorant/COD): only need matches_per_group
+            # teams_per_group and qualifying_per_group are fixed at 2 and 1
+            if not matches_per_group:
+                return Response(
+                    {"error": "matches_per_group is required for 5v5 tournaments (1=BO1, 2=BO2, 3=BO3)"},
+                    status=400,
+                )
+            try:
+                matches_per_group = int(matches_per_group)
+            except (ValueError, TypeError):
+                return Response({"error": "matches_per_group must be an integer"}, status=400)
+            
+            if matches_per_group not in [1, 2, 3]:
+                return Response(
+                    {"error": "matches_per_group must be 1 (BO1), 2 (BO2), or 3 (BO3)"},
+                    status=400,
+                )
         else:
             if not all([teams_per_group, qualifying_per_group, matches_per_group]):
                 return Response(
@@ -89,18 +110,20 @@ class ConfigureRoundView(generics.GenericAPIView):
                     status=400,
                 )
 
-        try:
-            teams_per_group = int(teams_per_group)
-            qualifying_per_group = int(qualifying_per_group)
-            matches_per_group = int(matches_per_group)
-        except (ValueError, TypeError):
-            return Response({"error": "All configuration values must be integers"}, status=400)
+        # Type conversion for multi-team games
+        if not is_5v5_game:
+            try:
+                teams_per_group = int(teams_per_group)
+                qualifying_per_group = int(qualifying_per_group)
+                matches_per_group = int(matches_per_group)
+            except (ValueError, TypeError):
+                return Response({"error": "All configuration values must be integers"}, status=400)
 
-        # Validate teams_per_group max limit
-        if teams_per_group > TournamentGroupService.MAX_TEAMS_PER_GROUP:
-            return Response(
-                {"error": f"Teams per group cannot exceed {TournamentGroupService.MAX_TEAMS_PER_GROUP}"}, status=400
-            )
+            # Validate teams_per_group max limit
+            if teams_per_group > TournamentGroupService.MAX_TEAMS_PER_GROUP:
+                return Response(
+                    {"error": f"Teams per group cannot exceed {TournamentGroupService.MAX_TEAMS_PER_GROUP}"}, status=400
+                )
 
         # Get total teams for this round
         if round_number == 1:
@@ -113,42 +136,76 @@ class ConfigureRoundView(generics.GenericAPIView):
         if total_teams == 0:
             return Response({"error": "No teams available for this round"}, status=400)
 
-        # Calculate group distribution
+        # For 5v5 games, check minimum team requirement
+        if is_5v5_game and total_teams < 2:
+            return Response({"error": "Minimum 2 confirmed teams required for 5v5 tournament"}, status=400)
+
+        # Create groups and matches based on game format
         try:
-            if is_scrim:
-                # Force 1 group for scrims
-                num_groups = 1
-                teams_distribution = [total_teams]
+            if is_5v5_game:
+                # 5v5 Head-to-Head Format (Valorant/COD)
+                logger.debug(
+                    f"Creating 5v5 lobbies - Tournament: {tournament.id}, Round: {round_number}, Total teams: {total_teams}, Matches per lobby: {matches_per_group}"  # noqa E501
+                )
+                
+                result = TournamentGroupService.create_5v5_groups(
+                    tournament=tournament,
+                    round_number=round_number,
+                    matches_per_group=matches_per_group,
+                )
+                
+                if 'error' in result:
+                    return Response({"error": result['error']}, status=400)
+                
+                groups = result['groups']
+                bye_team = result['bye_team']
+                num_lobbies = result['total_lobbies']
+                bye_message = result['bye_message']
+                
+                logger.info(
+                    f"5v5 Lobbies created successfully - Tournament: {tournament.id}, Round: {round_number}, Lobbies: {num_lobbies}, Bye team: {bye_team.team_name if bye_team else 'None'}"  # noqa E501
+                )
+                
             else:
-                num_groups, teams_distribution = TournamentGroupService.calculate_groups(total_teams, teams_per_group)
+                # Multi-team Format (BGMI, Freefire, Scarfall)
+                # Calculate group distribution
+                if is_scrim:
+                    # Force 1 group for scrims
+                    num_groups = 1
+                    teams_distribution = [total_teams]
+                else:
+                    num_groups, teams_distribution = TournamentGroupService.calculate_groups(total_teams, teams_per_group)
+
+                # Validate qualifying teams
+                total_qualifying = num_groups * qualifying_per_group
+                if not is_scrim and qualifying_per_group > teams_per_group:
+                    return Response(
+                        {
+                            "error": f"Qualifying teams per group ({qualifying_per_group}) cannot exceed teams per group ({teams_per_group})"  # noqa: E501
+                        },
+                        status=400,
+                    )
+
+                logger.debug(
+                    f"Creating multi-team groups - Num groups: {num_groups}, Teams per group: {teams_per_group}, Matches per group: {matches_per_group}"  # noqa E501
+                )
+                groups = TournamentGroupService.create_groups_for_round(
+                    tournament=tournament,
+                    round_number=round_number,
+                    teams_per_group=teams_per_group if not is_scrim else total_teams,
+                    qualifying_per_group=qualifying_per_group,
+                    matches_per_group=matches_per_group,
+                )
+                logger.info(
+                    f"Multi-team groups created successfully - Tournament: {tournament.id}, Round: {round_number}, Groups: {len(groups)}"  # noqa E501
+                )
+                
+                bye_team = None
+                bye_message = None
+                num_lobbies = num_groups
+                
         except ValueError as e:
             return Response({"error": str(e)}, status=400)
-
-        # Validate qualifying teams
-        total_qualifying = num_groups * qualifying_per_group
-        if not is_scrim and qualifying_per_group > teams_per_group:
-            return Response(
-                {
-                    "error": f"Qualifying teams per group ({qualifying_per_group}) cannot exceed teams per group ({teams_per_group})"  # noqa: E501
-                },
-                status=400,
-            )
-
-        # Create groups and matches
-        try:
-            logger.debug(
-                f"Creating groups - Num groups: {num_groups}, Teams per group: {teams_per_group}, Matches per group: {matches_per_group}"  # noqa E501
-            )
-            groups = TournamentGroupService.create_groups_for_round(
-                tournament=tournament,
-                round_number=round_number,
-                teams_per_group=teams_per_group if not is_scrim else total_teams,
-                qualifying_per_group=qualifying_per_group,
-                matches_per_group=matches_per_group,
-            )
-            logger.info(
-                f"Groups created successfully - Tournament: {tournament.id}, Round: {round_number}, Groups: {len(groups)}"  # noqa E501
-            )
         except Exception as e:
             logger.error(
                 f"Failed to create groups - Tournament: {tournament.id}, Round: {round_number}, Error: {str(e)}",
@@ -159,27 +216,60 @@ class ConfigureRoundView(generics.GenericAPIView):
         # Update tournament round status
         if not tournament.round_status:
             tournament.round_status = {}
-        tournament.round_status[str(round_number)] = "ongoing"
+        
+        # Preserve existing round metadata (like bye_team_id) and add status
+        round_key = str(round_number)
+        if isinstance(tournament.round_status.get(round_key), dict):
+            tournament.round_status[round_key]["status"] = "ongoing"
+        else:
+            tournament.round_status[round_key] = {"status": "ongoing"}
+        
         tournament.current_round = round_number
         tournament.save(update_fields=["round_status", "current_round"])
 
-        return Response(
-            {
-                "message": f"{'Scrim' if is_scrim else 'Round ' + str(round_number)} configured successfully ({num_groups} group created)",  # noqa: E501
-                "num_groups": num_groups,
-                "teams_distribution": teams_distribution,
-                "total_qualifying": total_qualifying,
-                "groups": [
-                    {
-                        "id": g.id,
-                        "group_name": g.group_name,
-                        "teams_count": g.teams.count(),
-                        "matches_count": g.matches.count(),
-                    }
-                    for g in groups
-                ],
-            }
-        )
+        # Build response
+        response_data = {
+            "message": f"{'Scrim' if is_scrim else 'Round ' + str(round_number)} configured successfully",
+            "num_groups": num_lobbies,
+            "groups": [
+                {
+                    "id": g.id,
+                    "group_name": g.group_name,
+                    "teams_count": g.teams.count(),
+                    "teams": [
+                        {
+                            "id": team.id,
+                            "team_name": team.team_name,
+                        }
+                        for team in g.teams.all()
+                    ] if is_5v5_game else None,
+                    "matches_count": g.matches.count(),
+                }
+                for g in groups
+            ],
+        }
+
+        if is_5v5_game:
+            # 5v5-specific response fields
+            response_data["format"] = "5v5_head_to_head"
+            response_data["total_lobbies"] = num_lobbies
+            response_data["matches_per_lobby"] = matches_per_group
+            if bye_team:
+                response_data["bye_team"] = {
+                    "id": bye_team.id,
+                    "team_name": bye_team.team_name,
+                }
+                response_data["bye_message"] = bye_message
+            else:
+                response_data["bye_team"] = None
+                response_data["bye_message"] = None
+        else:
+            # Multi-team response fields
+            response_data["format"] = "multi_team"
+            response_data["teams_distribution"] = teams_distribution if not is_scrim else [total_teams]
+            response_data["total_qualifying"] = total_qualifying if not is_scrim else 0
+
+        return Response(response_data)
 
 
 class RoundGroupsListView(generics.GenericAPIView):
@@ -247,6 +337,9 @@ class RoundGroupsListView(generics.GenericAPIView):
                             "status": match.status,
                             "match_id": match.match_id,
                             "match_password": match.match_password,
+                            "scheduled_date": str(match.scheduled_date) if match.scheduled_date else None,
+                            "scheduled_time": str(match.scheduled_time) if match.scheduled_time else None,
+                            "map_name": match.map_name or None,
                             "started_at": match.started_at,
                             "ended_at": match.ended_at,
                             "scores_submitted": match.scores.exists(),
@@ -316,6 +409,18 @@ class StartMatchView(generics.GenericAPIView):
 
         if not match_number:
             return Response({"error": "match_number is required"}, status=400)
+        
+        # Validate match_id based on game requirements
+        if not match_id:
+            return Response({"error": "match_id is required"}, status=400)
+        
+        # Validate password requirement based on game
+        requires_password = tournament.requires_password()
+        if requires_password and not match_password:
+            return Response(
+                {"error": f"match_password is required for {tournament.game_name} tournaments"},
+                status=400
+            )
 
         try:
             match = Match.objects.get(group=group, match_number=match_number)
@@ -349,7 +454,7 @@ class StartMatchView(generics.GenericAPIView):
 
         # Update match details
         match.match_id = match_id
-        match.match_password = match_password
+        match.match_password = match_password if requires_password else ""
         match.status = "ongoing"
         match.started_at = timezone.now()
         match.save()
@@ -359,17 +464,23 @@ class StartMatchView(generics.GenericAPIView):
             group.status = "ongoing"
             group.save(update_fields=["status"])
 
+        # Build response
+        response_match = {
+            "id": match.id,
+            "match_number": match.match_number,
+            "match_id": match.match_id,
+            "status": match.status,
+            "started_at": match.started_at,
+        }
+        
+        # Only include password in response if required
+        if requires_password:
+            response_match["match_password"] = match.match_password
+
         return Response(
             {
                 "message": f"Match {match_number} started successfully",
-                "match": {
-                    "id": match.id,
-                    "match_number": match.match_number,
-                    "match_id": match.match_id,
-                    "match_password": match.match_password,
-                    "status": match.status,
-                    "started_at": match.started_at,
-                },
+                "match": response_match,
             }
         )
         logger.debug(
@@ -476,6 +587,12 @@ class SubmitMatchScoresView(generics.GenericAPIView):
             )
             created_count += 1
 
+        # For 5v5 games: Determine match winner after scores are submitted
+        is_5v5_game = tournament.is_5v5_game()
+        if is_5v5_game:
+            match.determine_winner()
+            logger.debug(f"Match winner determined - Match: {match_id}, Winner: {match.winner.team_name if match.winner else 'None'}")
+
         # Update RoundScore aggregates
         logger.debug(f"Calculating round scores - Tournament: {tournament.id}, Round: {match.group.round_number}")
         TournamentGroupService.calculate_round_scores(tournament, match.group.round_number)
@@ -489,6 +606,12 @@ class SubmitMatchScoresView(generics.GenericAPIView):
 
         if all_matches_scored and group.matches.filter(status="completed").count() == group.matches.count():
             group.status = "completed"
+            
+            # For 5v5 games: Determine group winner after all matches are completed
+            if is_5v5_game:
+                group.determine_group_winner()
+                logger.debug(f"Group winner determined - Group: {group.group_name}, Winner: {group.winner.team_name if group.winner else 'None'}")
+            
             group.save(update_fields=["status"])
 
         return Response(
@@ -535,6 +658,9 @@ class RoundResultsView(generics.GenericAPIView):
         # Check if this is the final round
         final_round_number = max(r["round"] for r in tournament.rounds)
         is_final_round = round_number == final_round_number
+        
+        # Check if this is a 5v5 game
+        is_5v5_game = tournament.is_5v5_game()
 
         results = []
         all_qualified_teams = []
@@ -542,47 +668,107 @@ class RoundResultsView(generics.GenericAPIView):
         for group in groups:
             standings = TournamentGroupService.calculate_group_standings(group)
 
-            # Use the qualifying_teams stored in the group
-            qualifying_per_group = group.qualifying_teams
+            # Handle 5v5 vs multi-team format
+            if is_5v5_game and isinstance(standings, dict) and standings.get('is_5v5'):
+                # 5v5 Head-to-Head Format
+                group_winner_id = None
+                group_loser_id = None
+                
+                # Determine winner from standings
+                if standings['group_winner'] == 'team_a':
+                    group_winner_id = standings['team_a']['team_id']
+                    group_loser_id = standings['team_b']['team_id']
+                elif standings['group_winner'] == 'team_b':
+                    group_winner_id = standings['team_b']['team_id']
+                    group_loser_id = standings['team_a']['team_id']
+                
+                if is_final_round:
+                    qualified = []
+                    qualified_team_ids = []
+                else:
+                    # Winner qualifies to next round
+                    if group_winner_id:
+                        qualified = [standings['team_a'] if standings['group_winner'] == 'team_a' else standings['team_b']]
+                        qualified_team_ids = [group_winner_id]
+                        all_qualified_teams.append(group_winner_id)
+                    else:
+                        qualified = []
+                        qualified_team_ids = []
 
-            if is_final_round:
-                # In final round, we don't qualify teams, we select a winner
-                # Winner is the top team across all groups in the final round
-                qualified = []
-                qualified_team_ids = []
-            else:
-                qualified = standings[:qualifying_per_group]
-                qualified_team_ids = [t["team_id"] for t in qualified]
-                all_qualified_teams.extend(qualified_team_ids)
-
-            results.append(
-                {
+                results.append({
                     "group_name": group.group_name,
+                    "format": "5v5_head_to_head",
                     "standings": standings,
                     "qualified_teams": qualified,
                     "qualified_count": len(qualified),
-                }
-            )
+                })
+            else:
+                # Multi-team Format (existing logic)
+                qualifying_per_group = group.qualifying_teams
+
+                if is_final_round:
+                    qualified = []
+                    qualified_team_ids = []
+                else:
+                    qualified = standings[:qualifying_per_group]
+                    qualified_team_ids = [t["team_id"] for t in qualified]
+                    all_qualified_teams.extend(qualified_team_ids)
+
+                results.append({
+                    "group_name": group.group_name,
+                    "format": "multi_team",
+                    "standings": standings,
+                    "qualified_teams": qualified,
+                    "qualified_count": len(qualified),
+                })
+                
         logger.debug(f"Qualified teams: {all_qualified_teams}")
 
         if is_final_round:
             # Calculate overall winner from final round
-            all_final_standings = []
-            for group in groups:
-                standings = TournamentGroupService.calculate_group_standings(group)
-                all_final_standings.extend(standings)
+            winner = None
+            
+            if is_5v5_game:
+                # For 5v5: Winner is the only team that won their final group
+                # (should only be 1 group in final round with 2 teams)
+                for group in groups:
+                    standings = TournamentGroupService.calculate_group_standings(group)
+                    if isinstance(standings, dict) and standings.get('is_5v5'):
+                        if standings['group_winner'] == 'team_a':
+                            winner = {
+                                "team_id": standings['team_a']['team_id'],
+                                "team_name": standings['team_a']['team_name'],
+                                "match_wins": standings['team_a']['match_wins'],
+                                "total_points": standings['team_a']['total_points'],
+                                "total_kills": standings['team_a']['total_kills'],
+                            }
+                        elif standings['group_winner'] == 'team_b':
+                            winner = {
+                                "team_id": standings['team_b']['team_id'],
+                                "team_name": standings['team_b']['team_name'],
+                                "match_wins": standings['team_b']['match_wins'],
+                                "total_points": standings['team_b']['total_points'],
+                                "total_kills": standings['team_b']['total_kills'],
+                            }
+                        break  # Only one final group in 5v5
+            else:
+                # For multi-team: Aggregate all standings and find top team
+                all_final_standings = []
+                for group in groups:
+                    standings = TournamentGroupService.calculate_group_standings(group)
+                    if isinstance(standings, list):
+                        all_final_standings.extend(standings)
 
-            # Sort all teams using the same tiebreaking logic as calculate_group_standings
-            # This ensures consistent rankings even when all teams have 0 points
-            all_final_standings.sort(
-                key=lambda x: (
-                    -x["total_points"],  # Higher points first
-                    -x["wins"],  # More wins breaks ties
-                    -x["kill_points"],  # More kills breaks ties
-                    x["team_name"],  # Alphabetical as final tiebreaker
+                # Sort all teams using the same tiebreaking logic as calculate_group_standings
+                all_final_standings.sort(
+                    key=lambda x: (
+                        -x["total_points"],  # Higher points first
+                        -x["wins"],  # More wins breaks ties
+                        -x["kill_points"],  # More kills breaks ties
+                        x["team_name"],  # Alphabetical as final tiebreaker
+                    )
                 )
-            )
-            winner = all_final_standings[0] if all_final_standings else None
+                winner = all_final_standings[0] if all_final_standings else None
 
             # Update tournament winner
             if winner:
@@ -596,41 +782,74 @@ class RoundResultsView(generics.GenericAPIView):
                 {
                     "round_number": round_number,
                     "is_final_round": True,
+                    "format": "5v5_head_to_head" if is_5v5_game else "multi_team",
                     "groups": results,
-                    "results": all_final_standings,  # Return full sorted standings
                     "winner": winner,
                     "tournament_completed": True,
                 }
             )
-            logger.debug(f"Final round completed - results: {all_final_standings}")
+            logger.debug(f"Final round completed - winner: {winner}")
         else:
             # Calculate eliminated teams for each group
             total_eliminated = 0
+            
             for i, result in enumerate(results):
                 group = groups[i]
                 standings = TournamentGroupService.calculate_group_standings(group)
-                qualified_team_ids = [t["team_id"] for t in result["qualified_teams"]]
+                
+                if is_5v5_game and isinstance(standings, dict) and standings.get('is_5v5'):
+                    # 5v5: Loser is eliminated
+                    qualified_team_ids = [t['team_id'] for t in result["qualified_teams"]]
+                    
+                    # Get loser (the team that didn't win)
+                    loser = None
+                    if standings['group_winner'] == 'team_a':
+                        loser = {
+                            "team_id": standings['team_b']['team_id'],
+                            "team_name": standings['team_b']['team_name'],
+                            "match_wins": standings['team_b']['match_wins'],
+                            "total_points": standings['team_b']['total_points'],
+                            "total_kills": standings['team_b']['total_kills'],
+                            "rank": 2,
+                        }
+                    elif standings['group_winner'] == 'team_b':
+                        loser = {
+                            "team_id": standings['team_a']['team_id'],
+                            "team_name": standings['team_a']['team_name'],
+                            "match_wins": standings['team_a']['match_wins'],
+                            "total_points": standings['team_a']['total_points'],
+                            "total_kills": standings['team_a']['total_kills'],
+                            "rank": 2,
+                        }
+                    
+                    eliminated_teams = [loser] if loser else []
+                    result["eliminated_teams"] = eliminated_teams
+                    result["eliminated_count"] = len(eliminated_teams)
+                    total_eliminated += len(eliminated_teams)
+                else:
+                    # Multi-team: Teams not in qualifying list are eliminated
+                    qualified_team_ids = [t["team_id"] for t in result["qualified_teams"]]
 
-                # Add rank to standings
-                for rank, standing in enumerate(standings, start=1):
-                    standing["rank"] = rank
+                    # Add rank to standings
+                    for rank, standing in enumerate(standings, start=1):
+                        standing["rank"] = rank
 
-                # Get eliminated teams (those not in qualifying list)
-                eliminated_teams = [
-                    {
-                        "team_id": s["team_id"],
-                        "team_name": s["team_name"],
-                        "total_points": s["total_points"],
-                        "wins": s["wins"],
-                        "rank": s["rank"],
-                    }
-                    for s in standings
-                    if s["team_id"] not in qualified_team_ids
-                ]
+                    # Get eliminated teams (those not in qualifying list)
+                    eliminated_teams = [
+                        {
+                            "team_id": s["team_id"],
+                            "team_name": s["team_name"],
+                            "total_points": s["total_points"],
+                            "wins": s["wins"],
+                            "rank": s["rank"],
+                        }
+                        for s in standings
+                        if s["team_id"] not in qualified_team_ids
+                    ]
 
-                result["eliminated_teams"] = eliminated_teams
-                result["eliminated_count"] = len(eliminated_teams)
-                total_eliminated += len(eliminated_teams)
+                    result["eliminated_teams"] = eliminated_teams
+                    result["eliminated_count"] = len(eliminated_teams)
+                    total_eliminated += len(eliminated_teams)
 
             # Update tournament selected_teams for this round
             if not tournament.selected_teams:
@@ -649,6 +868,7 @@ class RoundResultsView(generics.GenericAPIView):
                     "round_number": round_number,
                     "current_round": round_number,
                     "is_final_round": False,
+                    "format": "5v5_head_to_head" if is_5v5_game else "multi_team",
                     "groups": results,
                     "total_qualified": len(all_qualified_teams),
                     "total_eliminated": total_eliminated,
@@ -685,25 +905,37 @@ class GetTeamPlayersView(generics.GenericAPIView):
         if team_members:
             # Enrich with player profile data from team_members JSON
             for member in team_members:
-                # Try to get player by ID first, then by username
-                player_id = member.get("id")
-                username = member.get("username")
-
+                # team_members may be stored as a list of dicts OR as a list of usernames (strings).
                 player_profile = None
 
-                if player_id:
-                    try:
-                        player_profile = PlayerProfile.objects.select_related("user").get(id=player_id)
-                    except PlayerProfile.DoesNotExist:
-                        pass
+                # If member is a dict, try to read id/username keys
+                if isinstance(member, dict):
+                    player_id = member.get("id")
+                    username = member.get("username")
 
-                if not player_profile and username:
+                    if player_id:
+                        try:
+                            player_profile = PlayerProfile.objects.select_related("user").get(id=player_id)
+                        except PlayerProfile.DoesNotExist:
+                            player_profile = None
+
+                    if not player_profile and username:
+                        try:
+                            user = User.objects.get(username=username, user_type="player")
+                            player_profile = user.player_profile
+                        except (User.DoesNotExist, PlayerProfile.DoesNotExist, AttributeError):
+                            player_profile = None
+
+                # If member is a string, treat it as username
+                elif isinstance(member, str):
+                    username = member
                     try:
                         user = User.objects.get(username=username, user_type="player")
                         player_profile = user.player_profile
                     except (User.DoesNotExist, PlayerProfile.DoesNotExist, AttributeError):
-                        pass
+                        player_profile = None
 
+                # If we found a profile, append enriched data
                 if player_profile:
                     players_data.append(
                         {

@@ -121,54 +121,104 @@ class PlayerProfileSerializer(serializers.ModelSerializer):
         return registrations_count
 
     def get_tournament_wins(self, obj):
+        # Get game filter from context (default: 'ALL')
+        game_filter = self.context.get('game_filter', 'ALL')
+        
         # Prefer membership where they are captain, or just the first one
         memberships = TeamMember.objects.filter(user=obj.user).select_related("team")
         max_wins = 0
         for m in memberships:
             try:
-                if hasattr(m.team, "statistics"):
-                    max_wins = max(max_wins, m.team.statistics.tournament_wins)
+                if game_filter == 'ALL':
+                    # Aggregate across all game-specific stats (exclude 'ALL' row)
+                    total = m.team.statistics_by_game.exclude(game_name='ALL').aggregate(
+                        total_wins=Sum('tournament_wins')
+                    )['total_wins'] or 0
+                    max_wins = max(max_wins, total)
+                else:
+                    # Get game-specific stats
+                    stats = m.team.statistics_by_game.filter(game_name=game_filter).first()
+                    if stats:
+                        max_wins = max(max_wins, stats.tournament_wins)
             except Exception:
                 continue
         return max_wins
 
     def get_scrim_wins(self, obj):
+        # Get game filter from context (default: 'ALL')
+        game_filter = self.context.get('game_filter', 'ALL')
+        
         memberships = TeamMember.objects.filter(user=obj.user).select_related("team")
         max_wins = 0
         for m in memberships:
             try:
-                if hasattr(m.team, "statistics"):
-                    max_wins = max(max_wins, m.team.statistics.scrim_wins)
+                if game_filter == 'ALL':
+                    # Aggregate across all game-specific stats (exclude 'ALL' row)
+                    total = m.team.statistics_by_game.exclude(game_name='ALL').aggregate(
+                        total_wins=Sum('scrim_wins')
+                    )['total_wins'] or 0
+                    max_wins = max(max_wins, total)
+                else:
+                    # Get game-specific stats
+                    stats = m.team.statistics_by_game.filter(game_name=game_filter).first()
+                    if stats:
+                        max_wins = max(max_wins, stats.scrim_wins)
             except Exception:
                 continue
         return max_wins
 
     def get_global_rank(self, obj):
+        # Get game filter from context (default: 'ALL')
+        game_filter = self.context.get('game_filter', 'ALL')
+        
         membership = TeamMember.objects.filter(user=obj.user).first()
         if membership:
             try:
-                if hasattr(membership.team, "statistics"):
-                    return membership.team.statistics.rank
+                # For ranks, always use the stored rank from the 'ALL' or specific game row
+                if game_filter == 'ALL':
+                    # For ALL, use the aggregate rank stored in 'ALL' row
+                    stats = membership.team.statistics_by_game.filter(game_name='ALL').first()
+                else:
+                    # For specific game, use that game's rank
+                    stats = membership.team.statistics_by_game.filter(game_name=game_filter).first()
+                if stats:
+                    return stats.rank
             except Exception:
                 pass
         return None
 
     def get_tournament_rank(self, obj):
+        # Get game filter from context (default: 'ALL')
+        game_filter = self.context.get('game_filter', 'ALL')
+        
         membership = TeamMember.objects.filter(user=obj.user).first()
         if membership:
             try:
-                if hasattr(membership.team, "statistics"):
-                    return membership.team.statistics.tournament_rank
+                # For ranks, use the stored rank from the 'ALL' or specific game row
+                if game_filter == 'ALL':
+                    stats = membership.team.statistics_by_game.filter(game_name='ALL').first()
+                else:
+                    stats = membership.team.statistics_by_game.filter(game_name=game_filter).first()
+                if stats:
+                    return stats.tournament_rank
             except Exception:
                 pass
         return None
 
     def get_scrim_rank(self, obj):
+        # Get game filter from context (default: 'ALL')
+        game_filter = self.context.get('game_filter', 'ALL')
+        
         membership = TeamMember.objects.filter(user=obj.user).first()
         if membership:
             try:
-                if hasattr(membership.team, "statistics"):
-                    return membership.team.statistics.scrim_rank
+                # For ranks, use the stored rank from the 'ALL' or specific game row
+                if game_filter == 'ALL':
+                    stats = membership.team.statistics_by_game.filter(game_name='ALL').first()
+                else:
+                    stats = membership.team.statistics_by_game.filter(game_name=game_filter).first()
+                if stats:
+                    return stats.scrim_rank
             except Exception:
                 pass
         return None
@@ -355,6 +405,8 @@ class TeamSerializer(serializers.ModelSerializer):
     win_rate = serializers.ReadOnlyField()
     pending_requests_count = serializers.SerializerMethodField()
     user_request_status = serializers.SerializerMethodField()
+    stats_by_game = serializers.SerializerMethodField()
+    overall_stats = serializers.SerializerMethodField()
 
     def get_pending_requests_count(self, obj):
         return obj.join_requests.filter(status="pending").count()
@@ -365,6 +417,54 @@ class TeamSerializer(serializers.ModelSerializer):
             join_request = obj.join_requests.filter(player=request.user).first()
             return join_request.status if join_request else None
         return None
+
+    def get_stats_by_game(self, obj):
+        """Get game-specific statistics breakdown (excluding 'ALL')"""
+        stats_dict = {}
+        game_stats = obj.statistics_by_game.exclude(game_name='ALL')
+        
+        for stats in game_stats:
+            stats_dict[stats.game_name] = {
+                'tournament_wins': stats.tournament_wins,
+                'scrim_wins': stats.scrim_wins,
+                'tournament_points': stats.tournament_position_points + stats.tournament_kill_points,
+                'scrim_points': stats.scrim_position_points + stats.scrim_kill_points,
+                'rank': stats.rank,
+                'tournament_rank': stats.tournament_rank,
+                'scrim_rank': stats.scrim_rank,
+            }
+        
+        return stats_dict
+
+    def get_overall_stats(self, obj):
+        """Get aggregate statistics across all games - aggregate from game-specific rows"""
+        # Aggregate wins and points from all game-specific rows (exclude 'ALL')
+        aggregated = obj.statistics_by_game.exclude(game_name='ALL').aggregate(
+            total_tournament_wins=Sum('tournament_wins'),
+            total_scrim_wins=Sum('scrim_wins'),
+            total_tournament_pos=Sum('tournament_position_points'),
+            total_tournament_kills=Sum('tournament_kill_points'),
+            total_scrim_pos=Sum('scrim_position_points'),
+            total_scrim_kills=Sum('scrim_kill_points'),
+            total_points_sum=Sum('total_points'),
+        )
+        
+        # Get ranks from the 'ALL' row (ranks are calculated separately)
+        all_stats = obj.statistics_by_game.filter(game_name='ALL').first()
+        
+        tournament_points = (aggregated['total_tournament_pos'] or 0) + (aggregated['total_tournament_kills'] or 0)
+        scrim_points = (aggregated['total_scrim_pos'] or 0) + (aggregated['total_scrim_kills'] or 0)
+        
+        return {
+            'tournament_wins': aggregated['total_tournament_wins'] or 0,
+            'scrim_wins': aggregated['total_scrim_wins'] or 0,
+            'tournament_points': tournament_points,
+            'scrim_points': scrim_points,
+            'total_points': aggregated['total_points_sum'] or 0,
+            'rank': all_stats.rank if all_stats else 0,
+            'tournament_rank': all_stats.tournament_rank if all_stats else 0,
+            'scrim_rank': all_stats.scrim_rank if all_stats else 0,
+        }
 
     class Meta:
         model = Team
@@ -384,6 +484,8 @@ class TeamSerializer(serializers.ModelSerializer):
             "win_rate",
             "pending_requests_count",
             "user_request_status",
+            "stats_by_game",
+            "overall_stats",
         )
         read_only_fields = ("id", "created_at", "captain")
 

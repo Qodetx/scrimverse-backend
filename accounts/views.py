@@ -534,11 +534,17 @@ class CurrentUserView(APIView):
 
     def get(self, request):
         user = request.user
+        # Get game filter from query params (default: 'ALL')
+        game_filter = request.query_params.get('game', 'ALL')
+        
         serializer = UserSerializer(user, context={"request": request})
 
         profile_data = None
         if user.user_type == "player" and hasattr(user, "player_profile"):
-            profile_data = PlayerProfileSerializer(user.player_profile, context={"request": request}).data
+            profile_data = PlayerProfileSerializer(
+                user.player_profile, 
+                context={"request": request, "game_filter": game_filter}
+            ).data
         elif user.user_type == "host" and hasattr(user, "host_profile"):
             profile_data = HostProfileSerializer(user.host_profile, context={"request": request}).data
 

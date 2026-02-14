@@ -20,6 +20,7 @@ class Tournament(models.Model):
     GAME_CHOICES = (
         ("BGMI", "BGMI"),
         ("COD", "Call of Duty"),
+        ("Valorant", "Valorant"),
         ("Freefire", "Free Fire"),
         ("Scarfall", "Scarfall"),
     )
@@ -28,6 +29,7 @@ class Tournament(models.Model):
         ("Squad", "Squad"),
         ("Duo", "Duo"),
         ("Solo", "Solo"),
+        ("5v5", "5v5"),
     )
 
     PLAN_CHOICES = (
@@ -177,13 +179,26 @@ class Tournament(models.Model):
         banner_mapping = {
             "BGMI": "tournaments/default_banners/BGMI_Banner.jpeg",
             "COD": "tournaments/default_banners/COD_Banner.jpg",
+            "Valorant": "tournaments/default_banners/Valorant_Banner.jpeg",
             "Freefire": "tournaments/default_banners/Freefire_Banner.jpeg",
             "Scarfall": "tournaments/default_banners/Scarfall_Banner.jpeg",
         }
         return banner_mapping.get(self.game_name, "tournaments/default_banners/BGMI_Banner.jpeg")
 
+    def is_5v5_game(self):
+        """Check if tournament is a 5v5 head-to-head game (COD or Valorant)"""
+        return self.game_name in ["COD", "Call of Duty", "Valorant"]
+
+    def requires_password(self):
+        """Check if tournament matches require password (all games except Valorant)"""
+        return self.game_name != "Valorant"
+
     def save(self, *args, **kwargs):
         """Override save to auto-update status and handle plan logic"""
+        # Auto-set game_mode to 5v5 for COD and Valorant tournaments
+        if self.is_5v5_game() and self.game_mode != "5v5":
+            self.game_mode = "5v5"
+
         # Enforce max participants for basic plan
         if self.plan_type == "basic" and self.max_participants > 100:
             self.max_participants = 100
@@ -336,6 +351,7 @@ class Group(models.Model):
     teams = models.ManyToManyField(TournamentRegistration, related_name="tournament_groups")
     qualifying_teams = models.IntegerField(default=0, help_text="Number of teams that qualify from this group")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="waiting")
+    winner = models.ForeignKey(TournamentRegistration, on_delete=models.SET_NULL, null=True, blank=True, related_name="won_groups", help_text="Winning team for 5v5 format")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -368,6 +384,27 @@ class Group(models.Model):
         # Return top K teams
         return [ts["team"] for ts in team_scores[: self.qualifying_teams]]
 
+    def determine_group_winner(self):
+        """
+        Determine winner for 5v5 lobby (head-to-head format)
+        Winner is team with most match wins
+        """
+        if not self.tournament.is_5v5_game():
+            return None
+        
+        team_wins = {}
+        for match in self.matches.filter(status="completed"):
+            if match.winner:
+                team_wins[match.winner.id] = team_wins.get(match.winner.id, 0) + 1
+        
+        if not team_wins:
+            return None
+        
+        winner_id = max(team_wins, key=team_wins.get)
+        self.winner = TournamentRegistration.objects.get(id=winner_id)
+        self.save()
+        return self.winner
+
 
 class Match(models.Model):
     """
@@ -393,6 +430,7 @@ class Match(models.Model):
     scheduled_date = models.DateField(null=True, blank=True, help_text="Scheduled date for this match")
     scheduled_time = models.TimeField(null=True, blank=True, help_text="Scheduled time for this match")
     map_name = models.CharField(max_length=100, null=True, blank=True, help_text="Game map name for this match (e.g., Erangel, Miramar)")
+    winner = models.ForeignKey(TournamentRegistration, on_delete=models.SET_NULL, null=True, blank=True, related_name="won_matches", help_text="Winning team for 5v5 format")
 
     class Meta:
         unique_together = ("group", "match_number")
@@ -401,6 +439,23 @@ class Match(models.Model):
 
     def __str__(self):
         return f"{self.group.group_name} - Match {self.match_number}"
+
+    def determine_winner(self):
+        """
+        Determine winner for 5v5 match (head-to-head format)
+        Winner is team with higher total points
+        """
+        if not self.group.tournament.is_5v5_game():
+            return None
+        
+        scores = self.scores.all()
+        if scores.count() < 2:
+            return None
+        
+        sorted_scores = sorted(scores, key=lambda s: s.total_points, reverse=True)
+        self.winner = sorted_scores[0].team
+        self.save()
+        return self.winner
 
 
 class MatchScore(models.Model):

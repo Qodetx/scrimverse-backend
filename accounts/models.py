@@ -149,9 +149,25 @@ class TeamStatistics(models.Model):
     """
     Leaderboard statistics for teams
     Tracks tournament and scrim wins and cumulative points separately
+    Now supports game-specific stats tracking (BGMI, COD, Valorant, etc.)
     """
 
-    team = models.OneToOneField(Team, on_delete=models.CASCADE, related_name="statistics")
+    GAME_CHOICES = [
+        ('BGMI', 'BGMI'),
+        ('COD', 'Call of Duty'),
+        ('Valorant', 'Valorant'),
+        ('Freefire', 'Free Fire'),
+        ('Scarfall', 'Scarfall'),
+        ('ALL', 'All Games'),
+    ]
+
+    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="statistics_by_game")
+    game_name = models.CharField(
+        max_length=100,
+        choices=GAME_CHOICES,
+        default='ALL',
+        help_text="Game-specific stats. 'ALL' represents aggregate stats across all games."
+    )
 
     # Tournament Statistics
     tournament_wins = models.IntegerField(default=0, help_text="Number of tournament victories (1st place finishes)")
@@ -178,11 +194,12 @@ class TeamStatistics(models.Model):
         self.save()
 
     def __str__(self):
-        return f"{self.team.name} - Rank #{self.rank}"
+        return f"{self.team.name} - {self.game_name} - Rank #{self.rank}"
 
     class Meta:
         db_table = "team_statistics"
-        ordering = ["rank"]
+        unique_together = ('team', 'game_name')
+        ordering = ['-total_points']
         verbose_name_plural = "Team Statistics"
 
 
