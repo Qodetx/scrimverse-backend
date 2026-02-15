@@ -196,15 +196,22 @@ CSRF_TRUSTED_ORIGINS = [o for o in config("CSRF_TRUSTED_ORIGINS", default="http:
 
 # ==================== REDIS CACHE CONFIGURATION ====================
 
-# Redis connection settings
-REDIS_HOST = config("REDIS_HOST", default="localhost")
-REDIS_PORT = config("REDIS_PORT", default=6379, cast=int)
-REDIS_DB = config("REDIS_DB", default=0, cast=int)
-REDIS_PASSWORD = config("REDIS_PASSWORD", default="")
-REDIS_CACHE_TTL = config("REDIS_CACHE_TTL", default=300, cast=int)
+# Redis connection settings - prioritize REDIS_URL from environment
+REDIS_URL = config("REDIS_URL", default=None)
 
-# Build Redis URL
-REDIS_URL = f"redis://{':' + REDIS_PASSWORD + '@' if REDIS_PASSWORD else ''}{REDIS_HOST}:{REDIS_PORT}"
+if not REDIS_URL:
+    REDIS_HOST = config("REDIS_HOST", default="localhost")
+    REDIS_PORT = config("REDIS_PORT", default=6379, cast=int)
+    REDIS_DB = config("REDIS_DB", default=0, cast=int)
+    REDIS_PASSWORD = config("REDIS_PASSWORD", default="")
+    
+    # Build Redis URL
+    REDIS_URL = f"redis://{':' + REDIS_PASSWORD + '@' if REDIS_PASSWORD else ''}{REDIS_HOST}:{REDIS_PORT}"
+else:
+    # If REDIS_URL is provided, we might still want REDIS_DB
+    REDIS_DB = config("REDIS_DB", default=0, cast=int)
+
+REDIS_CACHE_TTL = config("REDIS_CACHE_TTL", default=300, cast=int)
 
 # Cache configuration with Redis
 CACHES = {
