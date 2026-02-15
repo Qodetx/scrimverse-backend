@@ -46,3 +46,4 @@ phonepe-pg-sdk-python==2.1.7
 gunicorn==21.2.0
 whitenoise==6.6.0
 dj-database-url==2.1.0
+setuptools
