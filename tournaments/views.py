@@ -234,7 +234,7 @@ class TournamentCreateView(generics.CreateAPIView):
                     start_date=tournament.tournament_start.strftime("%B %d, %Y at %I:%M %p"),
                     max_participants=tournament.max_participants,
                     plan_type=f"{plan_type.title()} - {event_mode.title()}",
-                    plan_type=f"{plan_type.title()} - {event_mode.title()}",
+
                     tournament_url=f"{settings.FRONTEND_URL}/tournaments/{tournament.id}",
                     tournament_manage_url=f"{settings.FRONTEND_URL}/tournaments/{tournament.id}/manage",
                 )

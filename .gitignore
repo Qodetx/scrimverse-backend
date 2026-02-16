@@ -4,6 +4,7 @@
 *.so
 .Python
 venv/
+.venv/
 env/
 ENV/
 
@@ -54,4 +55,3 @@ celerybeat-schedule
 celerybeat-schedule-shm
 celerybeat-schedule-wal
 CELERY_SETUP.md
-
