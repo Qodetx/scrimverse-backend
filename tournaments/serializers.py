@@ -179,7 +179,6 @@ class TournamentListSerializer(serializers.ModelSerializer):
     is_featured = serializers.BooleanField(read_only=True)
     is_registered = serializers.SerializerMethodField()
     user_registration_status = serializers.SerializerMethodField()  # NEW: Return actual status for paid tournaments
-    user_registration_id = serializers.SerializerMethodField()  # NEW: Return registration ID for payment retry
 
     class Meta:
         model = Tournament
@@ -202,7 +201,6 @@ class TournamentListSerializer(serializers.ModelSerializer):
             "is_featured",
             "is_registered",
             "user_registration_status",
-            "user_registration_id",
             "plan_type",
             "homepage_banner",
             "event_mode",
@@ -245,24 +243,6 @@ class TournamentListSerializer(serializers.ModelSerializer):
         ).first()
         
         return reg.status if reg else None
-
-    def get_user_registration_id(self, obj):
-        """Return the registration ID if user has any registration (pending or confirmed)"""
-        request = self.context.get("request")
-        if not request or not request.user or not request.user.is_authenticated:
-            return None
-
-        if not hasattr(request.user, "player_profile"):
-            return None
-
-        from tournaments.models import TournamentRegistration
-        
-        reg = TournamentRegistration.objects.filter(
-            tournament=obj,
-            player=request.user.player_profile
-        ).first()
-        
-        return reg.id if reg else None
 
     def get_host(self, obj):
         return {"id": obj.host.id, "username": obj.host.user.username}
@@ -734,18 +714,18 @@ class TournamentRegistrationInitSerializer(serializers.Serializer):
         if tournament.current_participants >= tournament.max_participants:
             raise serializers.ValidationError({"error": "Tournament is full."})
         
-        # Check if captain (current user) already has a CONFIRMED registration.
-        # Allow retry/payment flow when status is 'pending' or 'pending_payment'.
+        # Check if captain (current user) is already registered
         from accounts.models import PlayerProfile
         player_profile = request.user.player_profile
-        confirmed_exists = TournamentRegistration.objects.filter(
+        existing = TournamentRegistration.objects.filter(
             tournament=tournament,
-            player=player_profile,
-            status="confirmed"
-        ).exists()
-
-        if confirmed_exists:
-            raise serializers.ValidationError({"error": "You are already registered for this tournament."})
+            player=player_profile
+        ).exclude(status="rejected").first()
+        
+        if existing:
+            raise serializers.ValidationError(
+                {"error": "You are already registered for this tournament."}
+            )
         
         # Verify that captain's email is not in the teammate emails
         captain_email = request.user.email.lower()

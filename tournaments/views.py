@@ -8,7 +8,6 @@ from django.conf import settings
 from django.core.cache import cache
 from django.db.models import Q, Sum
 from django.utils import timezone
-from django.db import IntegrityError
 
 from decouple import config
 from rest_framework import generics, parsers, permissions, status
@@ -41,28 +40,10 @@ logger = logging.getLogger(__name__)
 
 
 class IsHostUser(permissions.BasePermission):
-    """Permission class for Host users.
-
-    Access rules:
-    - User must be authenticated and have user_type == "host"
-    - Host must have an associated HostProfile
-    - Host is allowed if either:
-        * their Aadhar verification_status == "approved" (admin-approved), OR
-        * their `verified` badge is True (trusted host)
-    This enforces admin control over who can access host-only endpoints.
-    """
+    """Permission class for Host users"""
 
     def has_permission(self, request, view):
-        if not (request.user and request.user.is_authenticated and request.user.user_type == "host"):
-            return False
-
-        try:
-            host_profile = request.user.host_profile
-        except Exception:
-            return False
-
-        # Allow access if host's Aadhar verification is approved or verified badge is set
-        return bool(host_profile.verification_status == "approved" or host_profile.verified)
+        return request.user.is_authenticated and request.user.user_type == "host"
 
 
 class IsPlayerUser(permissions.BasePermission):
@@ -630,40 +611,18 @@ class TournamentRegistrationInitiateView(APIView):
             # Get tournament
             tournament = Tournament.objects.get(id=tournament_id)
             
-            # Reuse an existing pending registration if present (allows payment retry).
-            registration = TournamentRegistration.objects.filter(
+            # Create TournamentRegistration with new status 'pending_payment'
+            # (Note: if status doesn't exist in choices, we use an appropriate existing status)
+            registration = TournamentRegistration.objects.create(
                 tournament=tournament,
                 player=player_profile,
-                status__in=['pending', 'pending_payment']
-            ).first()
-
-            if registration:
-                # Update team name / temp emails if changed
-                registration.team_name = team_name or registration.team_name
-                registration.temp_teammate_emails = teammate_emails
-                registration.invited_members_status = {email: {'status': 'pending', 'username': None} for email in teammate_emails}
-                registration.payment_status = False
-                registration.save()
-            else:
-                # Create a new registration record in pending state
-                try:
-                    registration = TournamentRegistration.objects.create(
-                        tournament=tournament,
-                        player=player_profile,
-                        team_name=team_name,
-                        status='pending',  # Using 'pending' as interim status
-                        payment_status=False,
-                        temp_teammate_emails=teammate_emails,  # Store emails temporarily
-                        is_team_created=False,
-                        invited_members_status={email: {'status': 'pending', 'username': None} for email in teammate_emails}
-                    )
-                except IntegrityError as exc:
-                    # Race or duplicate: fetch the existing registration and continue
-                    logger.warning(f"IntegrityError creating registration for player {player_profile.id} tournament {tournament.id}: {exc}")
-                    registration = TournamentRegistration.objects.filter(tournament=tournament, player=player_profile).first()
-                    if not registration:
-                        # Re-raise if we can't recover
-                        raise
+                team_name=team_name,
+                status='pending',  # Using 'pending' as interim status
+                payment_status=False,
+                temp_teammate_emails=teammate_emails,  # Store emails temporarily
+                is_team_created=False,
+                invited_members_status={email: {'status': 'pending', 'username': None} for email in teammate_emails}
+            )
             
             logger.info(
                 f"Tournament registration initiated - Player: {request.user.id}, "
