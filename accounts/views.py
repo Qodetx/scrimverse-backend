@@ -316,31 +316,30 @@ class GoogleAuthView(APIView):
                         status=status.HTTP_404_NOT_FOUND,
                     )
 
-                # This is a signup - validate required fields
-                if not username or not phone_number:
-                    return Response(
-                        {"error": "Username and phone number are required for signup"},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
+                # This is a signup - allow missing username/phone and auto-generate username
+                # Phone will be optional; users can fill it later in settings
+                # Generate a username from Google given_name or email local-part
+                import re
 
-                # Validate username uniqueness
-                if User.objects.filter(username=username).exists():
-                    return Response(
-                        {"error": "Username already taken. Please choose another."}, status=status.HTTP_400_BAD_REQUEST
-                    )
+                raw_username = username or google_user_info.get("given_name") or email.split("@")[0]
+                # sanitize: keep alphanumerics and underscore
+                base = re.sub(r"[^0-9a-zA-Z_]", "", raw_username)[:24] or "player"
+                candidate = base
+                suffix = 0
+                while User.objects.filter(username=candidate).exists():
+                    suffix += 1
+                    candidate = f"{base}{suffix}"
 
-                # Validate phone number
-                if not phone_number.isdigit() or len(phone_number) != 10:
-                    return Response(
-                        {"error": "Phone number must be exactly 10 digits"}, status=status.HTTP_400_BAD_REQUEST
-                    )
+                final_username = candidate
+
+                phone_value = phone_number or ""
 
                 # Create user without password (Google OAuth users)
                 user = User.objects.create(
                     email=email,
-                    username=username,
+                    username=final_username,
                     user_type=user_type,
-                    phone_number=phone_number,
+                    phone_number=phone_value,
                     is_email_verified=True,  # Google already verified email
                     is_active=True,  # Activate account immediately
                 )

@@ -17,7 +17,7 @@ class User(AbstractUser):
 
     email = models.EmailField(unique=True)
     user_type = models.CharField(max_length=10, choices=USER_TYPE_CHOICES)
-    phone_number = models.CharField(max_length=10)
+    phone_number = models.CharField(max_length=10, blank=True, default='')
     profile_picture = models.ImageField(upload_to="profiles/", blank=True, null=True)
     username_change_count = models.IntegerField(default=0)
     last_username_change = models.DateTimeField(null=True, blank=True)
@@ -54,6 +54,8 @@ class PlayerProfile(models.Model):
     """
 
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="player_profile")
+    in_game_name = models.CharField(max_length=100, blank=True, default="", help_text="Player's in-game name")
+    game_id = models.CharField(max_length=100, blank=True, default="", help_text="Player's game ID or UID")
     preferred_games = models.JSONField(default=list, blank=True)  # List of games
     bio = models.TextField(blank=True)
     total_tournaments_participated = models.IntegerField(default=0)

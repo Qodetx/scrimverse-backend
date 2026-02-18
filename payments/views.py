@@ -83,6 +83,16 @@ def initiate_payment(request):
     user = request.user
 
     try:
+        # Quick config check: ensure PhonePe credentials are configured
+        client_id = config("CLIENT_ID", default="").strip()
+        client_secret = config("CLIENT_SECRET", default="").strip()
+        if not client_id or client_id == "dymmy" or not client_secret:
+            logger.error("PhonePe credentials not configured (CLIENT_ID/CLIENT_SECRET missing or default).")
+            return Response(
+                {"error": "Payment gateway not configured"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         # Get user profiles
         player_profile = None
         host_profile = None

@@ -8,6 +8,7 @@ from django.conf import settings
 from django.core.cache import cache
 from django.db.models import Q, Sum
 from django.utils import timezone
+from django.db import IntegrityError
 
 from decouple import config
 from rest_framework import generics, parsers, permissions, status
@@ -40,10 +41,28 @@ logger = logging.getLogger(__name__)
 
 
 class IsHostUser(permissions.BasePermission):
-    """Permission class for Host users"""
+    """Permission class for Host users.
+
+    Access rules:
+    - User must be authenticated and have user_type == "host"
+    - Host must have an associated HostProfile
+    - Host is allowed if either:
+        * their Aadhar verification_status == "approved" (admin-approved), OR
+        * their `verified` badge is True (trusted host)
+    This enforces admin control over who can access host-only endpoints.
+    """
 
     def has_permission(self, request, view):
-        return request.user.is_authenticated and request.user.user_type == "host"
+        if not (request.user and request.user.is_authenticated and request.user.user_type == "host"):
+            return False
+
+        try:
+            host_profile = request.user.host_profile
+        except Exception:
+            return False
+
+        # Allow access if host's Aadhar verification is approved or verified badge is set
+        return bool(host_profile.verification_status == "approved" or host_profile.verified)
 
 
 class IsPlayerUser(permissions.BasePermission):
@@ -611,24 +630,187 @@ class TournamentRegistrationInitiateView(APIView):
             # Get tournament
             tournament = Tournament.objects.get(id=tournament_id)
             
-            # Create TournamentRegistration with new status 'pending_payment'
-            # (Note: if status doesn't exist in choices, we use an appropriate existing status)
-            registration = TournamentRegistration.objects.create(
+            # Reuse an existing pending registration if present (allows payment retry).
+            registration = TournamentRegistration.objects.filter(
                 tournament=tournament,
                 player=player_profile,
-                team_name=team_name,
-                status='pending',  # Using 'pending' as interim status
-                payment_status=False,
-                temp_teammate_emails=teammate_emails,  # Store emails temporarily
-                is_team_created=False,
-                invited_members_status={email: {'status': 'pending', 'username': None} for email in teammate_emails}
-            )
+                status__in=['pending', 'pending_payment']
+            ).first()
+
+            if registration:
+                # Update team name / temp emails if changed
+                registration.team_name = team_name or registration.team_name
+                registration.temp_teammate_emails = teammate_emails
+                registration.invited_members_status = {email: {'status': 'pending', 'username': None} for email in teammate_emails}
+                registration.payment_status = False
+                registration.save()
+            else:
+                # Create a new registration record in pending state
+                try:
+                    registration = TournamentRegistration.objects.create(
+                        tournament=tournament,
+                        player=player_profile,
+                        team_name=team_name,
+                        status='pending',  # Using 'pending' as interim status
+                        payment_status=False,
+                        temp_teammate_emails=teammate_emails,  # Store emails temporarily
+                        is_team_created=False,
+                        invited_members_status={email: {'status': 'pending', 'username': None} for email in teammate_emails}
+                    )
+                except IntegrityError as exc:
+                    # Race or duplicate: fetch the existing registration and continue
+                    logger.warning(f"IntegrityError creating registration for player {player_profile.id} tournament {tournament.id}: {exc}")
+                    registration = TournamentRegistration.objects.filter(tournament=tournament, player=player_profile).first()
+                    if not registration:
+                        # Re-raise if we can't recover
+                        raise
             
             logger.info(
                 f"Tournament registration initiated - Player: {request.user.id}, "
                 f"Tournament: {tournament_id}, Registration: {registration.id}"
             )
             
+            # If tournament is free, confirm registration immediately and send invites
+            if float(tournament.entry_fee) == 0:
+                # For free tournaments we should confirm registration immediately.
+                # Use an atomic block so that confirmation persists even if email sending fails.
+                from django.db import transaction
+                from uuid import uuid4
+                from accounts.models import Team, TeamJoinRequest
+                from tournaments.tasks import send_team_invite_emails_task
+
+                try:
+                    with transaction.atomic():
+                        # Mark registration as confirmed immediately
+                        registration.payment_status = True
+                        registration.status = 'confirmed'
+                        registration.save()
+
+                        # Update tournament participants count
+                        tournament.current_participants = (tournament.current_participants or 0) + 1
+                        tournament.save()
+
+                    # Build team_members snapshot from emails and create TeamJoinRequest records
+                    team_members = []
+                    invited_partners = []  # For invite emails
+                    
+                    for email in teammate_emails:
+                        try:
+                            member_user = User.objects.get(email__iexact=email, user_type='player')
+                            player_id = getattr(member_user.player_profile, 'id', None)
+                            username = member_user.username
+                            is_registered = True
+                        except Exception:
+                            player_id = None
+                            username = None
+                            is_registered = False
+
+                        team_members.append({
+                            'email': email,
+                            'username': username,
+                            'player_id': player_id,
+                            'is_registered': is_registered,
+                        })
+
+                        # If NOT registered, create TeamJoinRequest with invite token
+                        if not is_registered:
+                            invite_token = str(uuid4())
+                            invite_expires = timezone.now() + timezone.timedelta(days=7)
+                            
+                            # Try to get or create a team for this registration
+                            # NOTE: Team.captain must be a User, not PlayerProfile
+                            team, _ = Team.objects.get_or_create(
+                                name=registration.team_name,
+                                captain=player_profile.user,  # Use player_profile.user, not player_profile
+                                defaults={'is_temporary': False}
+                            )
+                            
+                            # Create join request with invite token
+                            join_request = TeamJoinRequest.objects.create(
+                                team=team,
+                                status='pending',
+                                request_type='invite',
+                                invite_token=invite_token,
+                                invited_email=email,
+                                invite_expires_at=invite_expires,
+                                tournament_registration=registration,
+                            )
+                            
+                            invited_partners.append({
+                                'invited_email': email,
+                                'invite_token': invite_token,
+                                'invite_expires_at': invite_expires.strftime('%B %d, %Y'),
+                            })
+
+                    # Save team_members (non-critical - if this fails we still keep registration confirmed)
+                    try:
+                        registration.team_members = team_members
+                        registration.save()
+                    except Exception as e:
+                        logger.warning(f'Failed to save team_members for registration {registration.id}: {e}')
+
+                    # Invalidate caches and update host stats
+                    cache.delete('tournaments:list:all')
+                    cache.delete(f'host:dashboard:{tournament.host.id}')
+                    update_host_dashboard_stats.delay(tournament.host.id)
+
+                    # Queue registration confirmation email to captain
+                    try:
+                        send_tournament_registration_email_task.delay(
+                            user_email=player_profile.user.email,
+                            user_name=player_profile.user.username,
+                            tournament_name=tournament.title,
+                            game_name=tournament.game_name,
+                            start_date=tournament.tournament_start.strftime('%B %d, %Y at %I:%M %p'),
+                            registration_id=str(registration.id),
+                            tournament_url=f"{config('CORS_ALLOWED_ORIGINS', default='http://localhost:3000').split(',')[0]}/tournaments/{tournament.id}",
+                            team_name=registration.team_name,
+                        )
+                    except Exception as e:
+                        logger.error(f'Failed to queue captain registration email: {e}')
+
+                    # Queue registration confirmation to already-registered teammates
+                    try:
+                        for member in team_members:
+                            if member.get('is_registered') and member.get('username') != player_profile.user.username:
+                                try:
+                                    mu = User.objects.get(username=member.get('username'), user_type='player')
+                                    send_tournament_registration_email_task.delay(
+                                        user_email=mu.email,
+                                        user_name=mu.username,
+                                        tournament_name=tournament.title,
+                                        game_name=tournament.game_name,
+                                        start_date=tournament.tournament_start.strftime('%B %d, %Y at %I:%M %p'),
+                                        registration_id=str(registration.id),
+                                        tournament_url=f"{config('CORS_ALLOWED_ORIGINS', default='http://localhost:3000').split(',')[0]}/tournaments/{tournament.id}",
+                                        team_name=registration.team_name,
+                                    )
+                                except User.DoesNotExist:
+                                    continue
+                    except Exception as e:
+                        logger.error(f'Failed to queue teammate registration emails: {e}')
+
+                    # Queue invite emails to unregistered partners
+                    if invited_partners:
+                        try:
+                            send_team_invite_emails_task.delay(registration_id=registration.id)
+                        except Exception as e:
+                            logger.error(f'Failed to queue invite emails for registration {registration.id}: {e}')
+
+                    return Response({
+                        'success': True,
+                        'registration_id': registration.id,
+                        'status': registration.status,
+                        'team_name': registration.team_name,
+                        'invited_emails': teammate_emails,
+                        'entry_fee': str(tournament.entry_fee),
+                        'tournament_name': tournament.title,
+                        'message': 'Registration confirmed for free tournament. Invitations sent to teammates.'
+                    }, status=status.HTTP_201_CREATED)
+                except Exception as e:
+                    logger.error(f'Error confirming free registration: {e}')
+                    # If something unexpected failed, fall back to returning the pending response
+
             return Response({
                 'success': True,
                 'registration_id': registration.id,
@@ -751,9 +933,12 @@ class TournamentRegistrationCreateView(generics.CreateAPIView):
         )
         team_player_ids = {user.player_profile.id for user in team_users if hasattr(user, "player_profile")}
 
-        # Check existing registrations
-        existing_registrations = TournamentRegistration.objects.filter(tournament=tournament)
-        for registration in existing_registrations:
+        # Check existing CONFIRMED registrations (allow re-registration if only pending_payment)
+        confirmed_registrations = TournamentRegistration.objects.filter(
+            tournament=tournament,
+            status="confirmed"
+        )
+        for registration in confirmed_registrations:
             if registration.team_members:
                 registered_player_ids = {member.get("id") for member in registration.team_members if member.get("id")}
                 overlapping_ids = team_player_ids & registered_player_ids

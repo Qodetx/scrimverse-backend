@@ -60,9 +60,9 @@ class InitiatePaymentSerializer(serializers.Serializer):
     redirect_url = serializers.URLField(required=False)
 
     def validate_amount(self, value):
-        """Validate amount is at least 1 INR (100 paisa)"""
-        if value < 1:
-            raise serializers.ValidationError("Amount must be at least ₹1")
+        """Validate amount is non-negative (allow ₹0 for free tournaments)"""
+        if value < 0:
+            raise serializers.ValidationError("Amount cannot be negative")
         return value
 
     def validate(self, data):

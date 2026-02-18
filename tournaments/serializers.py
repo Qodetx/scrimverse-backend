@@ -178,6 +178,8 @@ class TournamentListSerializer(serializers.ModelSerializer):
 
     is_featured = serializers.BooleanField(read_only=True)
     is_registered = serializers.SerializerMethodField()
+    user_registration_status = serializers.SerializerMethodField()  # NEW: Return actual status for paid tournaments
+    user_registration_id = serializers.SerializerMethodField()  # NEW: Return registration ID for payment retry
 
     class Meta:
         model = Tournament
@@ -199,6 +201,8 @@ class TournamentListSerializer(serializers.ModelSerializer):
             "banner_image",
             "is_featured",
             "is_registered",
+            "user_registration_status",
+            "user_registration_id",
             "plan_type",
             "homepage_banner",
             "event_mode",
@@ -206,7 +210,7 @@ class TournamentListSerializer(serializers.ModelSerializer):
         )
 
     def get_is_registered(self, obj):
-        """Check if current user is registered for this tournament"""
+        """Check if current user is CONFIRMED registered for this tournament (not pending payment)"""
         request = self.context.get("request")
         if not request or not request.user or not request.user.is_authenticated:
             return False
@@ -217,7 +221,48 @@ class TournamentListSerializer(serializers.ModelSerializer):
         # Avoid local import if possible, but TournamentRegistration is needed
         from tournaments.models import TournamentRegistration
 
-        return TournamentRegistration.objects.filter(tournament=obj, player=request.user.player_profile).exists()
+        # Only return True if status is 'confirmed' (not 'pending_payment' or 'pending')
+        return TournamentRegistration.objects.filter(
+            tournament=obj, 
+            player=request.user.player_profile,
+            status='confirmed'
+        ).exists()
+
+    def get_user_registration_status(self, obj):
+        """Return the actual registration status (pending_payment, confirmed, rejected, etc.) or None"""
+        request = self.context.get("request")
+        if not request or not request.user or not request.user.is_authenticated:
+            return None
+
+        if not hasattr(request.user, "player_profile"):
+            return None
+
+        from tournaments.models import TournamentRegistration
+        
+        reg = TournamentRegistration.objects.filter(
+            tournament=obj,
+            player=request.user.player_profile
+        ).first()
+        
+        return reg.status if reg else None
+
+    def get_user_registration_id(self, obj):
+        """Return the registration ID if user has any registration (pending or confirmed)"""
+        request = self.context.get("request")
+        if not request or not request.user or not request.user.is_authenticated:
+            return None
+
+        if not hasattr(request.user, "player_profile"):
+            return None
+
+        from tournaments.models import TournamentRegistration
+        
+        reg = TournamentRegistration.objects.filter(
+            tournament=obj,
+            player=request.user.player_profile
+        ).first()
+        
+        return reg.id if reg else None
 
     def get_host(self, obj):
         return {"id": obj.host.id, "username": obj.host.user.username}
@@ -633,9 +678,16 @@ class TournamentRegistrationInitSerializer(serializers.Serializer):
                     required_teammates = 4  # Captain + 4 = 5 total
                     mode_name = "5v5"
                 else:
-                    # For other games (Squad/Duo/Solo)
+                    # For other games (Squad/Duo/Solo/4v4/2v2)
                     game_mode = tournament.game_mode
-                    required_teammates = {"Squad": 3, "Duo": 1, "Solo": 0}.get(game_mode, 3)
+                    required_teammates = {
+                        "5v5": 4,
+                        "4v4": 3,
+                        "Squad": 3,
+                        "2v2": 1,
+                        "Duo": 1,
+                        "Solo": 0
+                    }.get(game_mode, 0)  # Default to 0 if unknown mode
                     mode_name = game_mode
                 
                 if len(value) != required_teammates:
@@ -682,18 +734,18 @@ class TournamentRegistrationInitSerializer(serializers.Serializer):
         if tournament.current_participants >= tournament.max_participants:
             raise serializers.ValidationError({"error": "Tournament is full."})
         
-        # Check if captain (current user) is already registered
+        # Check if captain (current user) already has a CONFIRMED registration.
+        # Allow retry/payment flow when status is 'pending' or 'pending_payment'.
         from accounts.models import PlayerProfile
         player_profile = request.user.player_profile
-        existing = TournamentRegistration.objects.filter(
+        confirmed_exists = TournamentRegistration.objects.filter(
             tournament=tournament,
-            player=player_profile
-        ).exclude(status="rejected").first()
-        
-        if existing:
-            raise serializers.ValidationError(
-                {"error": "You are already registered for this tournament."}
-            )
+            player=player_profile,
+            status="confirmed"
+        ).exists()
+
+        if confirmed_exists:
+            raise serializers.ValidationError({"error": "You are already registered for this tournament."})
         
         # Verify that captain's email is not in the teammate emails
         captain_email = request.user.email.lower()

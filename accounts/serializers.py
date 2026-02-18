@@ -43,6 +43,8 @@ class PlayerProfileSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "user",
+            "in_game_name",
+            "game_id",
             "preferred_games",
             "bio",
             "total_tournaments_participated",
@@ -400,7 +402,7 @@ class TeamMemberSerializer(serializers.ModelSerializer):
 
 
 class TeamSerializer(serializers.ModelSerializer):
-    members = TeamMemberSerializer(many=True, read_only=True)
+    members = serializers.SerializerMethodField()  # Changed from TeamMemberSerializer to custom method
     captain_details = UserSerializer(source="captain", read_only=True)
     win_rate = serializers.ReadOnlyField()
     pending_requests_count = serializers.SerializerMethodField()
@@ -408,8 +410,29 @@ class TeamSerializer(serializers.ModelSerializer):
     stats_by_game = serializers.SerializerMethodField()
     overall_stats = serializers.SerializerMethodField()
 
+    def get_members(self, obj):
+        """Get all team members INCLUDING the captain"""
+        members_list = []
+        
+        # Add captain first
+        captain_member = {
+            'id': obj.captain.id,
+            'username': obj.captain.username,
+            'email': obj.captain.email,
+            'role': 'captain',
+            'join_date': obj.created_at.isoformat() if obj.created_at else None,
+        }
+        members_list.append(captain_member)
+        
+        # Add other team members
+        from accounts.serializers import TeamMemberSerializer
+        other_members_data = TeamMemberSerializer(obj.members.all(), many=True).data
+        members_list.extend(other_members_data)
+        
+        return members_list
+
     def get_pending_requests_count(self, obj):
-        return obj.join_requests.filter(status="pending").count()
+        return obj.join_requests.filter(status="pending", request_type="request").count()
 
     def get_user_request_status(self, obj):
         request = self.context.get("request")
