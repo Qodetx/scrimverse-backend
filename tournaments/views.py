@@ -618,11 +618,17 @@ class TournamentRegistrationInitiateView(APIView):
             # This ensures invites will use the same team as the registration
             team = None
             if float(tournament.entry_fee) == 0:
-                from accounts.models import Team as TeamModel
+                from accounts.models import Team as TeamModel, TeamMember as TeamMemberModel
                 team = TeamModel.objects.create(
                     name=team_name,
                     captain=request.user,
                     is_temporary=True
+                )
+                # Add captain as a team member
+                TeamMemberModel.objects.get_or_create(
+                    team=team,
+                    user=request.user,
+                    defaults={'username': request.user.username, 'is_captain': True}
                 )
             
             # Create TournamentRegistration with new status 'pending_payment'
@@ -675,6 +681,7 @@ class TournamentRegistrationInitiateView(APIView):
                             username = member_user.username
                             is_registered = True
                         except Exception:
+                            member_user = None
                             player_id = None
                             username = None
                             is_registered = False
@@ -686,39 +693,41 @@ class TournamentRegistrationInitiateView(APIView):
                             'is_registered': is_registered,
                         })
 
-                        # If NOT registered, create TeamJoinRequest with invite token
-                        if not is_registered:
-                            invite_token = str(uuid4())
-                            invite_expires = timezone.now() + timezone.timedelta(days=7)
-                            
-                            # Use the team associated with the registration if available
-                            # This ensures the TournamentRegistration.team_id matches the team
-                            # used for invites so that team members see the registration.
-                            team = registration.team
-                            # If for some reason the registration has no team, fall back to creating one
-                            if not team:
-                                team, _ = Team.objects.get_or_create(
-                                    name=registration.team_name,
-                                    captain=player_profile.user,  # Use player_profile.user, not player_profile
-                                    defaults={'is_temporary': False},
-                                )
-                            
-                            # Create join request with invite token
-                            join_request = TeamJoinRequest.objects.create(
-                                team=team,
-                                status='pending',
-                                request_type='invite',
-                                invite_token=invite_token,
-                                invited_email=email,
-                                invite_expires_at=invite_expires,
-                                tournament_registration=registration,
+                        # Create TeamJoinRequest with invite token for ALL teammates
+                        # (both registered and unregistered) so everyone gets a proper
+                        # invite they can accept/decline.
+                        invite_token = str(uuid4())
+                        invite_expires = timezone.now() + timezone.timedelta(days=7)
+                        
+                        # Use the team associated with the registration if available
+                        # This ensures the TournamentRegistration.team_id matches the team
+                        # used for invites so that team members see the registration.
+                        team = registration.team
+                        # If for some reason the registration has no team, fall back to creating one
+                        if not team:
+                            team, _ = Team.objects.get_or_create(
+                                name=registration.team_name,
+                                captain=player_profile.user,
+                                defaults={'is_temporary': False},
                             )
-                            
-                            invited_partners.append({
-                                'invited_email': email,
-                                'invite_token': invite_token,
-                                'invite_expires_at': invite_expires.strftime('%B %d, %Y'),
-                            })
+                        
+                        # Create join request with invite token
+                        join_request = TeamJoinRequest.objects.create(
+                            team=team,
+                            player=member_user if is_registered else None,
+                            status='pending',
+                            request_type='invite',
+                            invite_token=invite_token,
+                            invited_email=email,
+                            invite_expires_at=invite_expires,
+                            tournament_registration=registration,
+                        )
+                        
+                        invited_partners.append({
+                            'invited_email': email,
+                            'invite_token': invite_token,
+                            'invite_expires_at': invite_expires.strftime('%B %d, %Y'),
+                        })
 
                     # Save team_members (non-critical - if this fails we still keep registration confirmed)
                     try:
@@ -747,28 +756,7 @@ class TournamentRegistrationInitiateView(APIView):
                     except Exception as e:
                         logger.error(f'Failed to queue captain registration email: {e}')
 
-                    # Queue registration confirmation to already-registered teammates
-                    try:
-                        for member in team_members:
-                            if member.get('is_registered') and member.get('username') != player_profile.user.username:
-                                try:
-                                    mu = User.objects.get(username=member.get('username'), user_type='player')
-                                    send_tournament_registration_email_task.delay(
-                                        user_email=mu.email,
-                                        user_name=mu.username,
-                                        tournament_name=tournament.title,
-                                        game_name=tournament.game_name,
-                                        start_date=tournament.tournament_start.strftime('%B %d, %Y at %I:%M %p'),
-                                        registration_id=str(registration.id),
-                                        tournament_url=f"{config('CORS_ALLOWED_ORIGINS', default='http://localhost:3000').split(',')[0]}/tournaments/{tournament.id}",
-                                        team_name=registration.team_name,
-                                    )
-                                except User.DoesNotExist:
-                                    continue
-                    except Exception as e:
-                        logger.error(f'Failed to queue teammate registration emails: {e}')
-
-                    # Queue invite emails to unregistered partners
+                    # Queue invite emails to ALL teammates (registered and unregistered)
                     if invited_partners:
                         try:
                             send_team_invite_emails_task.delay(registration_id=registration.id)
@@ -1707,7 +1695,7 @@ class UpdateTournamentFieldsView(generics.UpdateAPIView):
         instance = self.get_object()
 
         # Only allow updating specific fields
-        allowed_fields = ["title", "description", "rules", "round_names", "rounds", "round_dates", "prize_distribution", "banner_image"]
+        allowed_fields = ["title", "description", "rules", "round_names", "rounds", "round_dates", "prize_distribution", "banner_image", "entry_fee", "prize_pool", "max_participants"]
         data = request.data.copy()
 
         # Filter to only allowed fields
