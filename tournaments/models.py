@@ -310,6 +310,28 @@ class TournamentRegistration(models.Model):
         unique_together = ("tournament", "player")
         ordering = ["-registered_at"]
 
+    def save(self, *args, **kwargs):
+        """
+        Enforce max participants: do not allow creating or confirming a registration
+        if the tournament already has max_participants confirmed registrations.
+        """
+        from django.core.exceptions import ValidationError
+
+        # Only enforce when the registration is (or will be) confirmed
+        will_be_confirmed = self.status == "confirmed"
+
+        if will_be_confirmed and self.tournament:
+            # Count other confirmed registrations for the tournament
+            qs = TournamentRegistration.objects.filter(tournament=self.tournament, status="confirmed")
+            if self.pk:
+                qs = qs.exclude(pk=self.pk)
+            confirmed_count = qs.count()
+
+            if confirmed_count >= self.tournament.max_participants:
+                raise ValidationError({"error": "Tournament is full"})
+
+        super().save(*args, **kwargs)
+
 
 class RoundScore(models.Model):
     """

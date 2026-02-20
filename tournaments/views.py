@@ -866,8 +866,8 @@ class TournamentRegistrationCreateView(generics.CreateAPIView):
                 }
             )
 
-        # Check if tournament is full
-        confirmed_count = TournamentRegistration.objects.filter(tournament=tournament).count()
+        # Check if tournament is full (only count confirmed registrations)
+        confirmed_count = TournamentRegistration.objects.filter(tournament=tournament, status="confirmed").count()
 
         if confirmed_count >= tournament.max_participants:
             raise ValidationError({"error": "Tournament is full"})
@@ -1041,9 +1041,11 @@ class TournamentRegistrationCreateView(generics.CreateAPIView):
                 f"Registration created - ID: {registration.id}, Player: {player_profile.user.username}, Tournament: {tournament.title}, Team: {registration.team_name}"  # noqa E501
             )
 
-            # Update participant count
-            tournament.current_participants += 1
-            tournament.save()
+            # Update participant count to accurate confirmed registrations
+            tournament.current_participants = TournamentRegistration.objects.filter(
+                tournament=tournament, status="confirmed"
+            ).count()
+            tournament.save(update_fields=["current_participants"])
 
             # Invalidate caches
             cache.delete("tournaments:list:all")

@@ -657,7 +657,7 @@ class TournamentRegistrationInitSerializer(serializers.Serializer):
         child=serializers.EmailField(),
         required=False,
         allow_empty=True,
-        help_text="List of teammate email addresses (optional - can invite 1 to 5 teammates or play solo)"
+        help_text="List of teammate email addresses. For 5v5 games (Valorant/COD): 4 emails required. For Squad BGMI: 3 emails required."
     )
     
     def validate_team_name(self, value):
@@ -747,6 +747,25 @@ class TournamentRegistrationInitSerializer(serializers.Serializer):
         if captain_email in teammate_emails:
             raise serializers.ValidationError(
                 {"teammate_emails": "Captain's email cannot be in the teammate list."}
+            )
+        
+        # VALIDATE MANDATORY TEAMMATE EMAILS BASED ON GAME MODE
+        # For 5v5 games (Valorant, COD) - Need exactly 4 teammates (5 total including captain)
+        # For Squad mode games (BGMI) - Need exactly 3 teammates (4 total including captain)
+        game_name = tournament.game_name.lower()
+        game_mode = tournament.game_mode
+        
+        required_teammates = 0
+        if game_mode == "5v5" or (game_name in ["valorant", "cod", "call of duty"]):
+            required_teammates = 4  # 5v5 needs 4 teammates + captain
+        elif game_mode == "Squad" and game_name in ["bgmi", "pubg"]:
+            required_teammates = 3  # Squad BGMI needs 3 teammates + captain (4 total)
+        
+        if required_teammates > 0 and len(teammate_emails) < required_teammates:
+            raise serializers.ValidationError(
+                {
+                    "teammate_emails": f"This tournament requires {required_teammates} teammate email(s) for {game_mode} mode in {tournament.game_name}. You provided {len(teammate_emails)}."
+                }
             )
         
         # Check that each teammate email is not already invited to this tournament

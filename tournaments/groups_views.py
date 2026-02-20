@@ -98,9 +98,9 @@ class ConfigureRoundView(generics.GenericAPIView):
             except (ValueError, TypeError):
                 return Response({"error": "matches_per_group must be an integer"}, status=400)
             
-            if matches_per_group not in [1, 2, 3]:
+            if matches_per_group not in [1, 2, 3, 4]:
                 return Response(
-                    {"error": "matches_per_group must be 1 (BO1), 2 (BO2), or 3 (BO3)"},
+                    {"error": "matches_per_group must be 1 (BO1), 2 (BO2), 3 (BO3), or 4 (BO4)"},
                     status=400,
                 )
         else:

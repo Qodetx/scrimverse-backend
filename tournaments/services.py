@@ -384,8 +384,8 @@ class TournamentGroupService:
         if not tournament.is_5v5_game():
             return {'error': 'Tournament is not a 5v5 game'}
         
-        if matches_per_group not in [1, 2, 3]:
-            return {'error': 'matches_per_group must be 1, 2, or 3'}
+        if matches_per_group not in [1, 2, 3, 4]:
+            return {'error': 'matches_per_group must be 1, 2, 3, or 4'}
         
         # Get confirmed teams for this round
         teams = TournamentGroupService._get_confirmed_teams(tournament, round_number)
