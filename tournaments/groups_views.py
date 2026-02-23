@@ -851,6 +851,22 @@ class RoundResultsView(generics.GenericAPIView):
                     result["eliminated_count"] = len(eliminated_teams)
                     total_eliminated += len(eliminated_teams)
 
+            # For 5v5 games: also include any bye teams from this round
+            if is_5v5_game:
+                # Find teams that were not part of any group (bye teams)
+                round_group_team_ids = set()
+                for group in groups:
+                    for team in group.teams.all():
+                        round_group_team_ids.add(team.id)
+                
+                # All confirmed registrations not in any lobby = bye teams
+                all_confirmed_ids = set(
+                    tournament.registrations.filter(status='confirmed').values_list('id', flat=True)
+                )
+                bye_team_ids = all_confirmed_ids - round_group_team_ids
+                all_qualified_teams = all_qualified_teams + list(bye_team_ids)
+                logger.debug(f"5v5 bye teams added to qualified: {bye_team_ids}, total now: {len(all_qualified_teams)}")
+
             # Update tournament selected_teams for this round
             if not tournament.selected_teams:
                 tournament.selected_teams = {}
@@ -861,7 +877,10 @@ class RoundResultsView(generics.GenericAPIView):
                 tournament.round_status = {}
             tournament.round_status[str(round_number)] = "completed"
 
-            tournament.save(update_fields=["selected_teams", "round_status"])
+            # Advance current_round
+            tournament.current_round = round_number + 1
+
+            tournament.save(update_fields=["selected_teams", "round_status", "current_round"])
 
             return Response(
                 {

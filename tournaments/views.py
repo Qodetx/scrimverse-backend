@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
@@ -1140,6 +1140,240 @@ class PlayerPublicRegistrationsView(generics.ListAPIView):
         if self.request.query_params.get("confirmed") == "true":
             queryset = queryset.filter(status="confirmed")
         return queryset.order_by("-registered_at")
+
+
+class RegistrationDetailView(APIView):
+    """
+    Get registration details with team members and their invitation status.
+    GET /api/tournaments/<tournament_id>/registrations/<registration_id>/
+    
+    Returns:
+    {
+        "id": 123,
+        "tournament": {...},
+        "team_name": "Alpha Squad",
+        "status": "confirmed",
+        "team_members": [
+            {
+                "email": "captain@test.com",
+                "username": " player1",
+                "status": "accepted",
+                "is_captain": true
+            },
+            {
+                "email": "teammate1@test.com",
+                "username": "player2",
+                "status": "pending",
+                "is_captain": false
+            },
+            {
+                "email": "teammate2@test.com",
+                "username": "player3",
+                "status": "declined",
+                "is_captain": false
+            }
+        ]
+    }
+    """
+    
+    permission_classes = [IsPlayerUser]
+    
+    def get(self, request, tournament_id, registration_id):
+        """Get registration details with team member statuses."""
+        try:
+            registration = TournamentRegistration.objects.select_related(
+                'tournament', 'player', 'team'
+            ).get(id=registration_id, tournament_id=tournament_id)
+        except TournamentRegistration.DoesNotExist:
+            return Response(
+                {'error': 'Registration not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Verify user is captain or team member
+        player_profile = request.user.player_profile
+        is_captain = registration.player == player_profile
+        
+        if not is_captain:
+            # Check if user is a team member
+            if registration.team and TeamMember.objects.filter(
+                team=registration.team,
+                user=request.user
+            ).exists():
+                pass  # Allow team members to view details
+            else:
+                return Response(
+                    {'error': 'Not authorized to view this registration'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        
+        # Build team members response with invite status
+        team_members = []
+        
+        # Add captain
+        team_members.append({
+            'email': registration.player.user.email,
+            'username': registration.player.user.username,
+            'status': 'accepted',
+            'is_captain': True
+        })
+        
+        # Add invited teammates from invited_members_status
+        from accounts.models import TeamJoinRequest
+        
+        invited_status = registration.invited_members_status or {}
+        for email, status_info in invited_status.items():
+            team_members.append({
+                'email': email,
+                'username': status_info.get('username'),
+                'status': status_info.get('status', 'pending'),
+                'is_captain': False
+            })
+        
+        response_data = {
+            'id': registration.id,
+            'tournament_id': registration.tournament.id,
+            'tournament_name': registration.tournament.title,
+            'team_name': registration.team_name,
+            'team_id': registration.team.id if registration.team else None,
+            'status': registration.status,
+            'entry_fee_paid': registration.payment_status,
+            'team_members': team_members
+        }
+        
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
+class ResendInviteView(APIView):
+    """
+    Resend invitation email to a declined or pending teammate.
+    POST /api/tournaments/<tournament_id>/registrations/<registration_id>/resend-invite/
+    
+    Request:
+    {
+        "email": "teammate@test.com"
+    }
+    
+    Returns:
+    {
+        "success": true,
+        "message": "Invitation resent to teammate@test.com",
+        "new_expires_at": "2026-02-27T09:24:59Z"
+    }
+    """
+    
+    permission_classes = [IsPlayerUser]
+    
+    def post(self, request, tournament_id, registration_id):
+        """Resend invitation to a teammate."""
+        email = request.data.get('email', '').lower().strip()
+        
+        if not email:
+            return Response(
+                {'error': 'Email is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            registration = TournamentRegistration.objects.select_related(
+                'tournament', 'player', 'team'
+            ).get(id=registration_id, tournament_id=tournament_id)
+        except TournamentRegistration.DoesNotExist:
+            return Response(
+                {'error': 'Registration not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Verify user is captain
+        player_profile = request.user.player_profile
+        if registration.player != player_profile:
+            return Response(
+                {'error': 'Only the captain can resend invitations'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Check if email is in the invited list
+        invited_status = registration.invited_members_status or {}
+        if email not in invited_status:
+            return Response(
+                {'error': f'Email {email} is not in the invited list'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Check if email was previously declined
+        old_status = invited_status[email].get('status')
+        if old_status not in ['declined', 'rejected', 'pending', 'expired']:
+            return Response(
+                {'error': f'Cannot resend invite: current status is {old_status}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Find existing TeamJoinRequest and reset it
+        from django.db import transaction
+        from uuid import uuid4
+        from accounts.models import TeamJoinRequest
+        
+        try:
+            with transaction.atomic():
+                # Find the old invite
+                old_invite = TeamJoinRequest.objects.filter(
+                    invited_email=email,
+                    tournament_registration=registration,
+                    request_type='invite'
+                ).first()
+                
+                # Generate new token
+                new_token = str(uuid4())
+                new_expires = timezone.now() + timedelta(days=7)
+                
+                if old_invite:
+                    # Reuse the old invite record, just reset it
+                    old_invite.invite_token = new_token
+                    old_invite.status = 'pending'
+                    old_invite.invite_expires_at = new_expires
+                    old_invite.save()
+                else:
+                    # Create new invite if doesn't exist
+                    # (shouldn't happen but handle for safety)
+                    TeamJoinRequest.objects.create(
+                        team=registration.team,
+                        player=None,
+                        request_type='invite',
+                        status='pending',
+                        invite_token=new_token,
+                        invited_email=email,
+                        invite_expires_at=new_expires,
+                        tournament_registration=registration
+                    )
+                
+                # Update invited_members_status
+                invited_status[email]['status'] = 'pending'
+                registration.invited_members_status = invited_status
+                registration.save(update_fields=['invited_members_status', 'updated_at'])
+                
+                # Queue resend email task
+                from tournaments.tasks import send_team_invite_emails_task
+                try:
+                    send_team_invite_emails_task.delay(registration_id=registration.id)
+                except Exception as e:
+                    logger.error(f'Failed to queue resend invite email: {e}')
+                
+                logger.info(
+                    f'Resent invitation to {email} for registration {registration.id}'
+                )
+                
+                return Response({
+                    'success': True,
+                    'message': f'Invitation resent to {email}',
+                    'new_expires_at': new_expires.isoformat()
+                }, status=status.HTTP_200_OK)
+                
+        except Exception as e:
+            logger.error(f'Error resending invite: {e}')
+            return Response(
+                {'error': 'Failed to resend invitation'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 # ============= Host Rating Views =============
