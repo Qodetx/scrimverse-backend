@@ -1,3 +1,5 @@
+import csv
+import io
 import json
 import logging
 from datetime import date, datetime, time
@@ -7,6 +9,7 @@ from uuid import uuid4
 from django.conf import settings
 from django.core.cache import cache
 from django.db.models import Q, Sum
+from django.http import HttpResponse
 from django.utils import timezone
 
 from decouple import config
@@ -15,7 +18,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import HostProfile, PlayerProfile, TeamMember, User
+from accounts.models import HostProfile, PlayerProfile, Team, TeamMember, User
 from accounts.tasks import update_host_rating_cache
 from payments.models import Payment, PlanPricing
 from payments.services import phonepe_service
@@ -1224,6 +1227,119 @@ class TournamentRegistrationsView(generics.ListAPIView):
         host_profile = HostProfile.objects.get(user=self.request.user)
         tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
         return TournamentRegistration.objects.filter(tournament=tournament)
+
+
+class TournamentRegistrationExportView(APIView):
+    """
+    Export tournament registrations as CSV (host only)
+    GET /api/tournaments/<tournament_id>/registrations/export/
+    """
+
+    permission_classes = [IsHostUser]
+
+    def get(self, request, tournament_id):
+        """Export all registrations for a tournament as CSV"""
+        try:
+            # Verify host owns the tournament
+            host_profile = HostProfile.objects.get(user=request.user)
+            tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
+
+            # Get all registrations
+            registrations = TournamentRegistration.objects.filter(tournament=tournament).select_related(
+                "player__user", "team"
+            )
+
+            # Create CSV in memory
+            output = io.StringIO()
+            writer = csv.DictWriter(
+                output,
+                fieldnames=[
+                    "User ID",
+                    "User Name",
+                    "Team ID",
+                    "Team Name",
+                    "Email",
+                    "Phone Number",
+                    "User Role",
+                    "Status",
+                ],
+            )
+
+            writer.writeheader()
+
+            # Track added players to avoid duplicates
+            added_players = set()
+
+            for registration in registrations:
+                player_user = registration.player.user
+                team = registration.team
+                team_id = team.id if team else "N/A"
+                team_name = team.name if team else registration.team_name or "N/A"
+
+                # Check if user is team captain
+                is_captain = False
+                if team:
+                    team_captain = team.captain
+                    is_captain = player_user.id == team_captain.id
+
+                role = "Captain" if is_captain else "Member"
+
+                # Create unique key to avoid duplicates
+                player_key = (player_user.id, team.id if team else -1)
+
+                if player_key not in added_players:
+                    writer.writerow(
+                        {
+                            "User ID": player_user.id,
+                            "User Name": player_user.username,
+                            "Team ID": team_id,
+                            "Team Name": team_name,
+                            "Email": player_user.email,
+                            "Phone Number": player_user.phone_number or "N/A",
+                            "User Role": role,
+                            "Status": registration.status,
+                        }
+                    )
+                    added_players.add(player_key)
+
+                # Add other team members if team exists
+                if team:
+                    team_members = TeamMember.objects.filter(team=team).select_related("user")
+                    for member in team_members:
+                        member_user = member.user
+                        if member_user:
+                            member_key = (member_user.id, team.id)
+                            if member_key not in added_players:
+                                member_role = "Captain" if member.is_captain else "Member"
+                                writer.writerow(
+                                    {
+                                        "User ID": member_user.id,
+                                        "User Name": member_user.username,
+                                        "Team ID": team.id,
+                                        "Team Name": team_name,
+                                        "Email": member_user.email,
+                                        "Phone Number": member_user.phone_number or "N/A",
+                                        "User Role": member_role,
+                                        "Status": registration.status,
+                                    }
+                                )
+                                added_players.add(member_key)
+
+            # Create HTTP response with CSV file
+            response = HttpResponse(output.getvalue(), content_type="text/csv")
+            response[
+                "Content-Disposition"
+            ] = f'attachment; filename="{tournament.title}_registrations.csv"'
+
+            return response
+
+        except Tournament.DoesNotExist:
+            return Response({"error": "Tournament not found"}, status=404)
+        except HostProfile.DoesNotExist:
+            return Response({"error": "Host profile not found"}, status=404)
+        except Exception as e:
+            logger.error(f"Error exporting tournament registrations: {str(e)}")
+            return Response({"error": "Failed to export registrations"}, status=500)
 
 
 class StartRoundView(generics.GenericAPIView):

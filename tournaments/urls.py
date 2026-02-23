@@ -32,6 +32,7 @@ from tournaments.views import (  # Tournament URLs; Registration URLs; Rating UR
     TournamentDetailView,
     TournamentListView,
     TournamentRegistrationCreateView,
+    TournamentRegistrationExportView,
     TournamentRegistrationInitiateView,
     TournamentRegistrationsView,
     TournamentStatsView,
@@ -68,6 +69,7 @@ urlpatterns = [
     path("<int:pk>/manage/", ManageTournamentView.as_view(), name="tournament-manage"),
     path("<int:pk>/update-fields/", UpdateTournamentFieldsView.as_view(), name="tournament-update-fields"),
     path("<int:tournament_id>/registrations/", TournamentRegistrationsView.as_view(), name="tournament-registrations"),
+    path("<int:tournament_id>/registrations/export/", TournamentRegistrationExportView.as_view(), name="tournament-registrations-export"),
     path(
         "<int:tournament_id>/registrations/<int:registration_id>/status/",
         UpdateTeamStatusView.as_view(),
