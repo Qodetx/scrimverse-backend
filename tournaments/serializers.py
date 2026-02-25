@@ -206,6 +206,9 @@ class TournamentListSerializer(serializers.ModelSerializer):
             "homepage_banner",
             "event_mode",
             "updated_at",
+            "rounds",
+            "current_round",
+            "round_names",
         )
 
     def get_is_registered(self, obj):

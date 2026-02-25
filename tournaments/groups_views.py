@@ -11,8 +11,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from accounts.models import HostProfile, PlayerProfile, TeamMember, User
-from tournaments.models import Group, Match, MatchScore, Tournament, TournamentRegistration
+from tournaments.models import Group, Match, MatchScore, RoundScore, Tournament, TournamentRegistration
 from tournaments.services import TournamentGroupService
+from tournaments.tasks import update_leaderboard
 
 logger = logging.getLogger("tournaments")
 
@@ -98,9 +99,9 @@ class ConfigureRoundView(generics.GenericAPIView):
             except (ValueError, TypeError):
                 return Response({"error": "matches_per_group must be an integer"}, status=400)
             
-            if matches_per_group not in [1, 2, 3, 4]:
+            if matches_per_group < 1:
                 return Response(
-                    {"error": "matches_per_group must be 1 (BO1), 2 (BO2), 3 (BO3), or 4 (BO4)"},
+                    {"error": "matches_per_group must be at least 1"},
                     status=400,
                 )
         else:
@@ -271,6 +272,75 @@ class ConfigureRoundView(generics.GenericAPIView):
 
         return Response(response_data)
 
+    def delete(self, request, tournament_id, round_number):
+        """
+        Reset a round configuration — delete all groups, matches, and scores
+        so the organizer can reconfigure from scratch.
+        DELETE /api/tournaments/<tournament_id>/rounds/<round_number>/configure/
+        """
+        logger.info(
+            f"Reset round request - Tournament: {tournament_id}, Round: {round_number}, Host: {request.user.id}"
+        )
+
+        host_profile = HostProfile.objects.get(user=request.user)
+        tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
+
+        # Validate round number
+        if round_number < 1 or round_number > len(tournament.rounds):
+            return Response(
+                {"error": f"Invalid round number. Tournament has {len(tournament.rounds)} rounds."},
+                status=400,
+            )
+
+        # Check that the round is actually configured
+        existing_groups = Group.objects.filter(tournament=tournament, round_number=round_number)
+        if not existing_groups.exists():
+            return Response(
+                {"error": f"Round {round_number} is not configured yet"},
+                status=400,
+            )
+
+        # Block reset if any match in this round has already started or completed
+        has_started_matches = Match.objects.filter(
+            group__tournament=tournament,
+            group__round_number=round_number,
+            status__in=["ongoing", "completed"],
+        ).exists()
+
+        if has_started_matches:
+            return Response(
+                {"error": "Cannot reset this round — some matches have already started or completed"},
+                status=400,
+            )
+
+        # Delete groups (cascades to matches and match scores)
+        deleted_count = existing_groups.count()
+        existing_groups.delete()
+
+        # Delete round scores
+        RoundScore.objects.filter(tournament=tournament, round_number=round_number).delete()
+
+        # Reset round status back to upcoming
+        round_key = str(round_number)
+        if tournament.round_status and round_key in tournament.round_status:
+            tournament.round_status[round_key] = {"status": "upcoming"}
+
+        # Reset current_round if it was set to this round
+        if tournament.current_round == round_number:
+            tournament.current_round = 0
+
+        tournament.save(update_fields=["round_status", "current_round"])
+
+        logger.info(
+            f"Round reset successfully - Tournament: {tournament.id}, Round: {round_number}, "
+            f"Deleted {deleted_count} groups"
+        )
+
+        return Response({
+            "message": f"Round {round_number} has been reset. You can now reconfigure it.",
+            "deleted_groups": deleted_count,
+        })
+
 
 class RoundGroupsListView(generics.GenericAPIView):
     """
@@ -353,6 +423,7 @@ class RoundGroupsListView(generics.GenericAPIView):
                                         else None,
                                         "position_points": score.position_points,
                                         "kill_points": score.kill_points,
+                                        "total_points": score.total_points,
                                         "wins": score.wins,
                                     }
                                     for score in match.scores.all()
@@ -367,6 +438,7 @@ class RoundGroupsListView(generics.GenericAPIView):
                                         else None,
                                         "position_points": 0,
                                         "kill_points": 0,
+                                        "total_points": 0,
                                         "wins": 0,
                                     }
                                     for team in group.teams.all()
@@ -593,6 +665,11 @@ class SubmitMatchScoresView(generics.GenericAPIView):
             match.determine_winner()
             logger.debug(f"Match winner determined - Match: {match_id}, Winner: {match.winner.team_name if match.winner else 'None'}")
 
+        # Clear room credentials so players can no longer see old room details
+        match.match_id = ""
+        match.match_password = ""
+        match.save(update_fields=["match_id", "match_password"])
+
         # Update RoundScore aggregates
         logger.debug(f"Calculating round scores - Tournament: {tournament.id}, Round: {match.group.round_number}")
         TournamentGroupService.calculate_round_scores(tournament, match.group.round_number)
@@ -764,7 +841,7 @@ class RoundResultsView(generics.GenericAPIView):
                     key=lambda x: (
                         -x["total_points"],  # Higher points first
                         -x["wins"],  # More wins breaks ties
-                        -x["kill_points"],  # More kills breaks ties
+                        -x["position_points"],  # Better placement breaks ties
                         x["team_name"],  # Alphabetical as final tiebreaker
                     )
                 )
@@ -777,6 +854,8 @@ class RoundResultsView(generics.GenericAPIView):
                 tournament.winners[str(round_number)] = winner["team_id"]
                 tournament.status = "completed"
                 tournament.save(update_fields=["winners", "status"])
+                # Trigger leaderboard update when tournament auto-completes via final round
+                update_leaderboard.delay()
 
             return Response(
                 {
@@ -840,6 +919,8 @@ class RoundResultsView(generics.GenericAPIView):
                             "team_id": s["team_id"],
                             "team_name": s["team_name"],
                             "total_points": s["total_points"],
+                            "position_points": s.get("position_points", 0),
+                            "kill_points": s.get("kill_points", 0),
                             "wins": s["wins"],
                             "rank": s["rank"],
                         }

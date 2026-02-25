@@ -1444,7 +1444,7 @@ class SubmitRoundScoresView(generics.GenericAPIView):
         # Auto select top N teams
         round_config = next((r for r in tournament.rounds if r["round"] == round_num), None)
         qualifying_teams = int(round_config.get("qualifying_teams") or 0)
-        all_scores = RoundScore.objects.filter(tournament=tournament, round_number=round_num).order_by("-total_points")
+        all_scores = RoundScore.objects.filter(tournament=tournament, round_number=round_num).order_by("-total_points", "-position_points")
 
         selected_team_ids = list(all_scores.values_list("team_id", flat=True)[:qualifying_teams])
         if not tournament.selected_teams:
@@ -1769,7 +1769,7 @@ class TournamentStatsView(generics.GenericAPIView):
                 total_kill_points=Sum("kill_points"),
                 total_points=Sum("total_points"),
             )
-            .order_by("-total_points", "-total_kill_points")
+            .order_by("-total_points", "-total_position_points")
         )
 
         # Add rank
@@ -1817,47 +1817,58 @@ class UpdateTournamentFieldsView(generics.UpdateAPIView):
     def update(self, request, *args, **kwargs):
         instance = self.get_object()
 
-        # Only allow updating specific fields
-        allowed_fields = ["title", "description", "rules", "round_names", "rounds", "round_dates", "prize_distribution", "banner_image", "entry_fee", "prize_pool", "max_participants"]
+        # Only allow editing upcoming tournaments — once started, configuration is locked
+        if instance.status != "upcoming":
+            return Response(
+                {"detail": "Tournament configuration can only be edited while the tournament is upcoming."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Allow updating all fields that are available during creation
+        allowed_fields = [
+            "title",
+            "description",
+            "rules",
+            "round_names",
+            "rounds",
+            "round_dates",
+            "tournament_date",
+            "tournament_time",
+            "tournament_start",
+            "tournament_end",
+            "registration_start",
+            "registration_end",
+            "max_participants",
+            "entry_fee",
+            "prize_pool",
+            "prize_distribution",
+            "placement_points",
+            "banner_image",
+            "tournament_file",
+            "plan_type",
+        ]
         data = request.data.copy()
 
         # Filter to only allowed fields
         filtered_data = {k: v for k, v in data.items() if k in allowed_fields}
 
-        # Handle file upload for banner_image
+        # Handle file uploads
         if "banner_image" in request.FILES:
             filtered_data["banner_image"] = request.FILES["banner_image"]
             # Pass the instance's plan_type so validate_banner_image sees the correct plan
             filtered_data["plan_type"] = instance.plan_type
 
+        if "tournament_file" in request.FILES:
+            filtered_data["tournament_file"] = request.FILES["tournament_file"]
+
         # Handle JSON fields
-        if "round_names" in filtered_data:
-            try:
-                if isinstance(filtered_data["round_names"], str):
-                    filtered_data["round_names"] = json.loads(filtered_data["round_names"])
-            except (json.JSONDecodeError, TypeError):
-                pass  # Let serializer validation handle invalid JSON
-
-        if "rounds" in filtered_data:
-            try:
-                if isinstance(filtered_data["rounds"], str):
-                    filtered_data["rounds"] = json.loads(filtered_data["rounds"])
-            except (json.JSONDecodeError, TypeError):
-                pass  # Let serializer validation handle invalid JSON
-
-        if "round_dates" in filtered_data:
-            try:
-                if isinstance(filtered_data["round_dates"], str):
-                    filtered_data["round_dates"] = json.loads(filtered_data["round_dates"])
-            except (json.JSONDecodeError, TypeError):
-                pass  # Let serializer validation handle invalid JSON
-
-        if "prize_distribution" in filtered_data:
-            try:
-                if isinstance(filtered_data["prize_distribution"], str):
-                    filtered_data["prize_distribution"] = json.loads(filtered_data["prize_distribution"])
-            except (json.JSONDecodeError, TypeError):
-                pass  # Let serializer validation handle invalid JSON
+        for json_field in ("round_names", "rounds", "round_dates", "prize_distribution", "placement_points"):
+            if json_field in filtered_data:
+                try:
+                    if isinstance(filtered_data[json_field], str):
+                        filtered_data[json_field] = json.loads(filtered_data[json_field])
+                except (json.JSONDecodeError, TypeError):
+                    pass  # Let serializer validation handle invalid JSON
 
         logger.info(f"Updating tournament {instance.id} with fields: {list(filtered_data.keys())}")
         if "rounds" in filtered_data:

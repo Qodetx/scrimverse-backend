@@ -151,14 +151,17 @@ class TournamentGroupService:
             List of dicts with team standings, sorted by total points descending
             Format: [{'team': TournamentRegistration, 'total_points': int, ...}, ...]
         """
-        # Check if this is a 5v5 head-to-head group (exactly 2 teams)
+        # Check game type first, not team count
+        # 5v5 tournaments (Valorant, COD) use head-to-head format
+        # Multi-team tournaments (BGMI, Freefire, Scarfall) use BR format
+        is_5v5_game = group.tournament.is_5v5_game()
         teams_count = group.teams.count()
         
-        if teams_count == 2:
-            # 5v5 Head-to-Head Format
+        if is_5v5_game and teams_count == 2:
+            # 5v5 Head-to-Head Format (Valorant, COD)
             return TournamentGroupService._calculate_5v5_standings(group)
         else:
-            # Multi-team format (existing logic)
+            # Multi-team format (BGMI, Freefire, Scarfall) - even if 2 teams remain in later rounds
             return TournamentGroupService._calculate_multi_team_standings(group)
 
     @staticmethod
@@ -190,13 +193,13 @@ class TournamentGroupService:
         # Sort by multiple criteria for consistent tiebreaking:
         # 1. Total points (descending)
         # 2. Wins (descending)
-        # 3. Kill points (descending)
+        # 3. Position/placement points (descending)
         # 4. Team name (ascending, for final tiebreaker)
         standings.sort(
             key=lambda x: (
                 -x["total_points"],  # Higher points first
                 -x["wins"],  # More wins breaks ties
-                -x["kill_points"],  # More kills breaks ties
+                -x["position_points"],  # Better placement breaks ties
                 x["team_name"],  # Alphabetical as final tiebreaker
             )
         )
@@ -384,8 +387,8 @@ class TournamentGroupService:
         if not tournament.is_5v5_game():
             return {'error': 'Tournament is not a 5v5 game'}
         
-        if matches_per_group not in [1, 2, 3, 4]:
-            return {'error': 'matches_per_group must be 1, 2, 3, or 4'}
+        if matches_per_group < 1:
+            return {'error': 'matches_per_group must be at least 1'}
         
         # Get confirmed teams for this round
         teams = TournamentGroupService._get_confirmed_teams(tournament, round_number)
