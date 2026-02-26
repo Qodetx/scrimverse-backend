@@ -53,7 +53,7 @@ if not t.selected_teams:
 if str(next_round) not in t.selected_teams:
     t.selected_teams[str(next_round)] = []
 
- t.save(update_fields=['current_round','round_status','selected_teams'])
+t.save(update_fields=['current_round','round_status','selected_teams'])
 print('Updated tournament: current_round', t.current_round)
 
 # Now configure next round using TournamentGroupService

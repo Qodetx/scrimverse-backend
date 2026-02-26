@@ -300,19 +300,6 @@ class ConfigureRoundView(generics.GenericAPIView):
                 status=400,
             )
 
-        # Block reset if any match in this round has already started or completed
-        has_started_matches = Match.objects.filter(
-            group__tournament=tournament,
-            group__round_number=round_number,
-            status__in=["ongoing", "completed"],
-        ).exists()
-
-        if has_started_matches:
-            return Response(
-                {"error": "Cannot reset this round — some matches have already started or completed"},
-                status=400,
-            )
-
         # Delete groups (cascades to matches and match scores)
         deleted_count = existing_groups.count()
         existing_groups.delete()
@@ -502,7 +489,8 @@ class StartMatchView(generics.GenericAPIView):
         if match.status == "completed":
             return Response({"error": "Match is already completed"}, status=400)
 
-        # Enforce sequential match flow: can only start match N if match N-1 is completed with scores
+        # Enforce sequential match flow: can only start match N if match N-1 is completed
+        # Note: Scores are OPTIONAL and can be entered later - don't block match start on missing scores
         if match_number > 1:
             previous_match = Match.objects.filter(group=group, match_number=match_number - 1).first()
 
@@ -511,15 +499,6 @@ class StartMatchView(generics.GenericAPIView):
                     return Response(
                         {
                             "error": f"Cannot start Match {match_number}. Match {match_number - 1} must be completed first."  # noqa: E501
-                        },
-                        status=400,
-                    )
-
-                # Check if previous match has scores submitted
-                if not previous_match.scores.exists():
-                    return Response(
-                        {
-                            "error": f"Cannot start Match {match_number}. Scores must be submitted for Match {match_number - 1} first."  # noqa: E501
                         },
                         status=400,
                     )
@@ -933,9 +912,13 @@ class RoundResultsView(generics.GenericAPIView):
                     total_eliminated += len(eliminated_teams)
 
             # Update tournament selected_teams for this round
+            # IMPORTANT: Deduplicate qualified teams to handle cases where the same team
+            # appears in multiple groups in the current round (e.g., 8 lobbies with 4 teams)
+            unique_qualified_teams = list(dict.fromkeys(all_qualified_teams))  # Preserves order, removes duplicates
+            
             if not tournament.selected_teams:
                 tournament.selected_teams = {}
-            tournament.selected_teams[str(round_number)] = all_qualified_teams
+            tournament.selected_teams[str(round_number)] = unique_qualified_teams
 
             # Mark round as completed
             if not tournament.round_status:
