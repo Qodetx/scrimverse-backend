@@ -313,6 +313,13 @@ def update_leaderboard():
 
     completed_tournaments = Tournament.objects.filter(status="completed")
 
+    # Get distinct game names from completed tournaments
+    game_names = list(
+        Tournament.objects.filter(status="completed")
+        .values_list("game_name", flat=True)
+        .distinct()
+    )
+
     teams_updated = 0
     for team in teams:
         try:
@@ -374,6 +381,61 @@ def update_leaderboard():
             stats.total_kill_points = stats.tournament_kill_points + stats.scrim_kill_points
             stats.total_points = stats.total_position_points + stats.total_kill_points
             stats.save()
+
+            # 4. Game-specific stats rows
+            for game in game_names:
+                # Tournament wins for this game
+                game_tournament_wins = 0
+                game_scrim_wins = 0
+                for tournament in completed_tournaments:
+                    if tournament.game_name != game:
+                        continue
+                    if tournament.winners:
+                        final_round = str(len(tournament.rounds)) if tournament.rounds else "1"
+                        winner_reg_id = tournament.winners.get(final_round)
+                        if winner_reg_id:
+                            try:
+                                winner_reg = TournamentRegistration.objects.get(id=winner_reg_id)
+                                if winner_reg.team and winner_reg.team.id == team.id:
+                                    if tournament.event_mode == "SCRIM":
+                                        game_scrim_wins += 1
+                                    else:
+                                        game_tournament_wins += 1
+                            except TournamentRegistration.DoesNotExist:
+                                pass
+
+                # Tournament points for this game
+                gt_scores = MatchScore.objects.filter(
+                    team__team=team,
+                    match__group__tournament__event_mode="TOURNAMENT",
+                    match__group__tournament__game_name=game,
+                ).aggregate(pos=Sum("position_points"), kills=Sum("kill_points"))
+
+                # Scrim points for this game
+                gs_scores = MatchScore.objects.filter(
+                    team__team=team,
+                    match__group__tournament__event_mode="SCRIM",
+                    match__group__tournament__game_name=game,
+                ).aggregate(pos=Sum("position_points"), kills=Sum("kill_points"))
+
+                g_t_pos = gt_scores["pos"] or 0
+                g_t_kills = gt_scores["kills"] or 0
+                g_s_pos = gs_scores["pos"] or 0
+                g_s_kills = gs_scores["kills"] or 0
+
+                # Only create/update rows if there are any stats for this game
+                if g_t_pos or g_t_kills or game_tournament_wins or g_s_pos or g_s_kills or game_scrim_wins:
+                    game_stats, _ = TeamStatistics.objects.get_or_create(team=team, game_name=game)
+                    game_stats.tournament_wins = game_tournament_wins
+                    game_stats.tournament_position_points = g_t_pos
+                    game_stats.tournament_kill_points = g_t_kills
+                    game_stats.scrim_wins = game_scrim_wins
+                    game_stats.scrim_position_points = g_s_pos
+                    game_stats.scrim_kill_points = g_s_kills
+                    game_stats.total_position_points = g_t_pos + g_s_pos
+                    game_stats.total_kill_points = g_t_kills + g_s_kills
+                    game_stats.total_points = game_stats.total_position_points + game_stats.total_kill_points
+                    game_stats.save()
 
             # Update Team model field for matches_played/wins
             team.total_matches = matches_played

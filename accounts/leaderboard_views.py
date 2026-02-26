@@ -4,7 +4,7 @@ Leaderboard API views
 import logging
 
 from django.core.cache import cache
-from django.db.models import F, Sum
+from django.db.models import F, Q, Sum
 
 from rest_framework import generics
 from rest_framework.permissions import AllowAny
@@ -52,30 +52,21 @@ class LeaderboardView(generics.GenericAPIView):
         # For specific game, filter directly
         if leaderboard_type == "scrims":
             if game_filter == 'ALL':
-                # Aggregate across all game-specific rows per team
-                aggregated = (
-                    TeamStatistics.objects.exclude(game_name='ALL')
-                    .values('team_id')
-                    .annotate(
-                        total_scrim_wins=Sum('scrim_wins'),
-                        total_scrim_position=Sum('scrim_position_points'),
-                        total_scrim_kill=Sum('scrim_kill_points'),
-                    )
-                    .filter(total_scrim_position__gt=0)
-                    .order_by('-total_scrim_position', '-total_scrim_kill', '-total_scrim_wins')[:limit]
+                # Use the pre-aggregated 'ALL' rows directly
+                top_teams = (
+                    TeamStatistics.objects.filter(game_name='ALL').select_related('team')
+                    .filter(Q(scrim_position_points__gt=0) | Q(scrim_kill_points__gt=0) | Q(scrim_wins__gt=0))
+                    .order_by('-scrim_position_points', '-scrim_kill_points', '-scrim_wins')[:limit]
                 )
                 leaderboard_data = []
-                for rank, entry in enumerate(aggregated, start=1):
-                    # Get the first stats row for serialization (team name etc.)
-                    sample = TeamStatistics.objects.filter(team_id=entry['team_id']).exclude(game_name='ALL').select_related('team').first()
-                    if sample:
-                        data = TeamStatisticsSerializer(sample).data
-                        data["rank"] = rank
-                        data["scrim_wins"] = entry['total_scrim_wins']
-                        data["total_points"] = (entry['total_scrim_position'] or 0) + (entry['total_scrim_kill'] or 0)
-                        data["total_position_points"] = entry['total_scrim_position'] or 0
-                        data["total_kill_points"] = entry['total_scrim_kill'] or 0
-                        leaderboard_data.append(data)
+                for rank, stats in enumerate(top_teams, start=1):
+                    data = TeamStatisticsSerializer(stats).data
+                    data["rank"] = rank
+                    data["scrim_wins"] = stats.scrim_wins
+                    data["total_points"] = stats.scrim_position_points + stats.scrim_kill_points
+                    data["total_position_points"] = stats.scrim_position_points
+                    data["total_kill_points"] = stats.scrim_kill_points
+                    leaderboard_data.append(data)
                 data = {
                     "leaderboard": leaderboard_data,
                     "total_teams": len(leaderboard_data),
@@ -106,41 +97,42 @@ class LeaderboardView(generics.GenericAPIView):
             logger.debug(f"Scrims leaderboard generated - {len(leaderboard_data)} teams")
         else:
             if game_filter == 'ALL':
-                # Aggregate across all game-specific rows per team
-                aggregated = (
-                    TeamStatistics.objects.exclude(game_name='ALL')
-                    .values('team_id')
-                    .annotate(
-                        total_t_wins=Sum('tournament_wins'),
-                        total_t_position=Sum('tournament_position_points'),
-                        total_t_kill=Sum('tournament_kill_points'),
-                    )
-                    .filter(total_t_position__gt=0)
-                    .order_by('-total_t_position', '-total_t_kill', '-total_t_wins')[:limit]
+                # Use the pre-aggregated 'ALL' rows directly (these are already aggregated by update_leaderboard task)
+                top_teams = (
+                    TeamStatistics.objects.filter(game_name='ALL').select_related('team')
+                    .filter(Q(tournament_position_points__gt=0) | Q(tournament_kill_points__gt=0) | Q(tournament_wins__gt=0))
+                    .order_by('-tournament_position_points', '-tournament_kill_points', '-tournament_wins')[:limit]
                 )
                 leaderboard_data = []
-                for rank, entry in enumerate(aggregated, start=1):
-                    sample = TeamStatistics.objects.filter(team_id=entry['team_id']).exclude(game_name='ALL').select_related('team').first()
-                    if sample:
-                        data = TeamStatisticsSerializer(sample).data
-                        data["rank"] = rank
-                        data["tournament_wins"] = entry['total_t_wins']
-                        data["total_points"] = (entry['total_t_position'] or 0) + (entry['total_t_kill'] or 0)
-                        data["total_position_points"] = entry['total_t_position'] or 0
-                        data["total_kill_points"] = entry['total_t_kill'] or 0
-                        leaderboard_data.append(data)
+                for rank, stats in enumerate(top_teams, start=1):
+                    data = TeamStatisticsSerializer(stats).data
+                    data["rank"] = rank
+                    data["tournament_wins"] = stats.tournament_wins
+                    data["total_points"] = stats.tournament_position_points + stats.tournament_kill_points
+                    data["total_position_points"] = stats.tournament_position_points
+                    data["total_kill_points"] = stats.tournament_kill_points
+                    leaderboard_data.append(data)
                 data = {
                     "leaderboard": leaderboard_data,
                     "total_teams": len(leaderboard_data),
                 }
             else:
-                # For tournaments leaderboard, order by tournament points
-                top_teams = (
-                    TeamStatistics.objects.filter(game_name=game_filter).select_related("team")
-                    .annotate(tournament_total=F("tournament_position_points") + F("tournament_kill_points"))
-                    .filter(tournament_total__gt=0)
-                    .order_by("-tournament_total", "-tournament_wins", "-tournament_kill_points")[:limit]
-                )
+                # For tournaments leaderboard, order by wins first for 5v5 games (Valorant/COD),
+                # otherwise order by points
+                WINS_ONLY_GAMES = ['Valorant', 'COD']
+                if game_filter in WINS_ONLY_GAMES:
+                    top_teams = (
+                        TeamStatistics.objects.filter(game_name=game_filter).select_related("team")
+                        .filter(tournament_wins__gt=0)
+                        .order_by("-tournament_wins")[:limit]
+                    )
+                else:
+                    top_teams = (
+                        TeamStatistics.objects.filter(game_name=game_filter).select_related("team")
+                        .annotate(tournament_total=F("tournament_position_points") + F("tournament_kill_points"))
+                        .filter(Q(tournament_total__gt=0) | Q(tournament_wins__gt=0))
+                        .order_by("-tournament_total", "-tournament_wins", "-tournament_kill_points")[:limit]
+                    )
 
                 # Manually add rank for tournaments
                 leaderboard_data = []
@@ -152,9 +144,20 @@ class LeaderboardView(generics.GenericAPIView):
                     data["total_kill_points"] = stats.tournament_kill_points
                     leaderboard_data.append(data)
 
+                if game_filter in WINS_ONLY_GAMES:
+                    total_teams_count = TeamStatistics.objects.filter(
+                        game_name=game_filter, tournament_wins__gt=0
+                    ).count()
+                else:
+                    total_teams_count = TeamStatistics.objects.filter(
+                        game_name=game_filter
+                    ).annotate(t_total=F("tournament_position_points") + F("tournament_kill_points")).filter(
+                        Q(t_total__gt=0) | Q(tournament_wins__gt=0)
+                    ).count()
+
                 data = {
                     "leaderboard": leaderboard_data,
-                    "total_teams": TeamStatistics.objects.filter(game_name=game_filter, tournament_position_points__gt=0).count(),
+                    "total_teams": total_teams_count,
                 }
             logger.debug(f"Tournaments leaderboard generated - {len(leaderboard_data)} teams")
 
