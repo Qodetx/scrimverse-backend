@@ -55,3 +55,14 @@ celerybeat-schedule
 celerybeat-schedule-shm
 celerybeat-schedule-wal
 CELERY_SETUP.md
+
+# Local development files (not pushed)
+.claude
+BGMI_BR_TOURNAMENT_GUIDE.md
+CLAUDE.md
+IMPLEMENTATION_CHECKLIST.md
+PROJECT_SPRINTS.md
+REGISTRATION_FLOW_CLARIFICATION.md
+RESULTS_UI_LOCATIONS.md
+Scrimverse Tournament System Updates – Valorant & Call Of Duty copy.md
+Scrimverse Tournament System Updates – Valorant & Call Of Duty.md
