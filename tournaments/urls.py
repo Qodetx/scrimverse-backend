@@ -1,17 +1,7 @@
 from django.urls import path
 
-# Groups and Matches Views
-from tournaments.groups_views import (
-    ConfigureRoundView,
-    EndMatchView,
-    GetTeamPlayersView,
-    RoundGroupsListView,
-    RoundResultsView,
-    StartMatchView,
-    SubmitMatchScoresView,
-)
 from tournaments.pricing_views import PlanPricingView
-from tournaments.views import (  # Tournament URLs; Registration URLs; Rating URLs
+from tournaments.views import (  # Tournament URLs; Registration URLs; Rating URLs; Groups/Matches URLs
     EndRoundView,
     EndTournamentView,
     HostDashboardStatsView,
@@ -40,6 +30,13 @@ from tournaments.views import (  # Tournament URLs; Registration URLs; Rating UR
     BulkScheduleUpdateView,
     UpdateTeamStatusView,
     UpdateTournamentFieldsView,
+    ConfigureRoundView,
+    RoundGroupsListView,
+    RoundResultsView,
+    StartMatchView,
+    EndMatchView,
+    SubmitMatchScoresView,
+    GetTeamPlayersView,
 )
 
 urlpatterns = [

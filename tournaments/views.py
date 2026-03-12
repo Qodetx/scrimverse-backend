@@ -2247,3 +2247,4 @@ class HostDashboardStatsView(APIView):
 
         logger.debug(f"Host dashboard stats - Host ID: {host_profile.id}, Stats: {stats}")
         logger.debug(f"Host dashboard stats - Host ID: {host_profile.id}, Recent activity: {recent_activity}")
+and

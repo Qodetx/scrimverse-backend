@@ -1,9 +1,5 @@
 import logging
-import secrets
-from datetime import timedelta
 
-from django.conf import settings
-from django.contrib.auth import authenticate
 from django.db import models
 from django.utils import timezone
 
@@ -12,707 +8,18 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework_simplejwt.tokens import RefreshToken
 
-from accounts.google_auth import GoogleOAuth
 from accounts.models import HostProfile, PlayerProfile, Team, TeamJoinRequest, TeamMember, User
 from accounts.serializers import (
-    HostProfileSerializer,
-    HostRegistrationSerializer,
-    LoginSerializer,
-    PlayerProfileSerializer,
-    PlayerRegistrationSerializer,
     TeamInviteDetailSerializer,
     TeamJoinRequestSerializer,
     TeamMemberSerializer,
     TeamSerializer,
-    UserSerializer,
 )
-from accounts.tasks import process_team_invitation, send_verification_email_task, send_welcome_email_task
-from accounts.validators import validate_aadhar_image
+from accounts.tasks import process_team_invitation
 from tournaments.models import RoundScore, TournamentRegistration
 
 logger = logging.getLogger(__name__)
-
-
-class PlayerRegistrationView(generics.CreateAPIView):
-    """
-    Player Registration API
-    POST /api/accounts/player/register/
-    """
-
-    serializer_class = PlayerRegistrationSerializer
-    permission_classes = [permissions.AllowAny]
-
-    def create(self, request, *args, **kwargs):
-        email = request.data.get("email")
-
-        # Check if user already exists with this email
-        if email:
-            try:
-                existing_user = User.objects.get(email=email)
-
-                # If user exists but is NOT verified, delete the old account and allow re-registration
-                if not existing_user.is_email_verified:
-                    logger.info(
-                        f"Deleting unverified account for {email} to allow re-registration (user_type: {existing_user.user_type})"  # noqa: E501
-                    )
-                    existing_user.delete()
-                    # Continue with registration below
-                else:
-                    # User exists and is verified - return error
-                    return Response(
-                        {
-                            "error": "An account with this email already exists and is verified. Please login instead.",
-                            "email": email,
-                        },
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-            except User.DoesNotExist:
-                # User doesn't exist, continue with registration
-                pass
-
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = serializer.save()
-
-        # Generate verification token
-        verification_token = secrets.token_urlsafe(32)
-        user.email_verification_token = verification_token
-        user.email_verification_sent_at = timezone.now()
-        user.is_email_verified = False  # Explicitly set to False
-        user.is_active = False  # Deactivate account until email is verified
-        user.save(
-            update_fields=["email_verification_token", "email_verification_sent_at", "is_email_verified", "is_active"]
-        )
-
-        # Send verification email (NOT welcome email)
-        frontend_url = settings.CORS_ALLOWED_ORIGINS[0]
-        verification_url = f"{frontend_url}/verify-email/{verification_token}"
-
-        send_verification_email_task.delay(
-            user_email=user.email, user_name=user.username, verification_url=verification_url
-        )
-        logger.info(f"Verification email sent to player: {user.email}")
-
-        # DO NOT return tokens - user must verify email first
-        return Response(
-            {
-                "message": "Registration successful! Please check your email to verify your account.",
-                "email": user.email,
-                "verification_required": True,
-            },
-            status=status.HTTP_201_CREATED,
-        )
-
-
-class HostRegistrationView(generics.CreateAPIView):
-    """
-    Host Registration API
-    POST /api/accounts/host/register/
-    """
-
-    serializer_class = HostRegistrationSerializer
-    permission_classes = [permissions.AllowAny]
-
-    def create(self, request, *args, **kwargs):
-        email = request.data.get("email")
-
-        # Check if user already exists with this email
-        if email:
-            try:
-                existing_user = User.objects.get(email=email)
-
-                # If user exists but is NOT verified, delete the old account and allow re-registration
-                if not existing_user.is_email_verified:
-                    logger.info(
-                        f"Deleting unverified account for {email} to allow re-registration (user_type: {existing_user.user_type})"  # noqa: E501
-                    )
-                    existing_user.delete()
-                    # Continue with registration below
-                else:
-                    # User exists and is verified - return error
-                    return Response(
-                        {
-                            "error": "An account with this email already exists and is verified. Please login instead.",
-                            "email": email,
-                        },
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-            except User.DoesNotExist:
-                # User doesn't exist, continue with registration
-                pass
-
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = serializer.save()
-
-        # Generate verification token
-        verification_token = secrets.token_urlsafe(32)
-        user.email_verification_token = verification_token
-        user.email_verification_sent_at = timezone.now()
-        user.is_email_verified = False  # Explicitly set to False
-        user.is_active = False  # Deactivate account until email is verified
-        user.save(
-            update_fields=["email_verification_token", "email_verification_sent_at", "is_email_verified", "is_active"]
-        )
-
-        # Send verification email (NOT welcome email)
-        frontend_url = settings.CORS_ALLOWED_ORIGINS[0]
-        verification_url = f"{frontend_url}/verify-email/{verification_token}"
-
-        send_verification_email_task.delay(
-            user_email=user.email, user_name=user.username, verification_url=verification_url
-        )
-        logger.info(f"Verification email sent to host: {user.email}")
-
-        # DO NOT return tokens - user must verify email first
-        return Response(
-            {
-                "message": "Registration successful! Please check your email to verify your account.",
-                "email": user.email,
-                "verification_required": True,
-            },
-            status=status.HTTP_201_CREATED,
-        )
-
-
-class LoginView(APIView):
-    """
-    Login API for both Players and Hosts
-    POST /api/accounts/login/
-    """
-
-    permission_classes = [permissions.AllowAny]
-
-    def post(self, request):
-        logger = logging.getLogger("accounts")
-
-        serializer = LoginSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        email = serializer.validated_data["email"]
-        password = serializer.validated_data["password"]
-        user_type = serializer.validated_data["user_type"]
-
-        logger.info(f"Login attempt - Email: {email}, User Type: {user_type}")
-
-        # Check if user exists
-        try:
-            user_obj = User.objects.get(email=email)
-            logger.debug(f"User found - ID: {user_obj.id}, Username: {user_obj.username}, Type: {user_obj.user_type}")
-        except User.DoesNotExist:
-            logger.warning(f"Login failed - No account found for email: {email}")
-            return Response({"error": "No account found with this email address"}, status=status.HTTP_401_UNAUTHORIZED)
-
-        # Authenticate user
-        user = authenticate(request, username=email, password=password)
-
-        if user is None:
-            # Check if login failed because account is inactive
-            if user_obj and not user_obj.is_active:
-                logger.warning(f"Login failed - Account inactive/unverified for email: {email}")
-                return Response(
-                    {
-                        "error": (
-                            "Please verify your email address before logging in. "
-                            "Check your inbox for the verification link."
-                        )
-                    },
-                    status=status.HTTP_401_UNAUTHORIZED,
-                )
-
-            logger.warning(f"Login failed - Incorrect password for email: {email}")
-            return Response({"error": "Incorrect password. Please try again."}, status=status.HTTP_401_UNAUTHORIZED)
-
-        # Check user type matches
-        if user.user_type != user_type:
-            logger.warning(
-                f"Login failed - User type mismatch. Expected: {user_type}, Actual: {user.user_type} for email: {email}"
-            )
-            return Response(
-                {"error": f"This account is not registered as a {user_type}"}, status=status.HTTP_403_FORBIDDEN
-            )
-
-        # Generate JWT tokens
-        refresh = RefreshToken.for_user(user)
-
-        logger.info(f"Login successful - User ID: {user.id}, Username: {user.username}, Type: {user.user_type}")
-
-        return Response(
-            {
-                "user": UserSerializer(user).data,
-                "tokens": {
-                    "refresh": str(refresh),
-                    "access": str(refresh.access_token),
-                },
-                "message": "Login successful!",
-            },
-            status=status.HTTP_200_OK,
-        )
-
-
-class GoogleAuthView(APIView):
-    """
-    Google OAuth Authentication for Player and Host
-    POST /api/accounts/google-auth/
-
-    Request body:
-    {
-        "token": "google_oauth_token",
-        "user_type": "player" or "host"
-    }
-    """
-
-    permission_classes = [permissions.AllowAny]
-
-    def post(self, request):
-        token = request.data.get("token")
-        user_type = request.data.get("user_type")
-        username = request.data.get("username")  # Required for signup
-        phone_number = request.data.get("phone_number")  # Required for signup
-        is_signup = request.data.get("is_signup", False)  # Flag to distinguish login vs signup
-
-        if not token:
-            return Response({"error": "Google token is required"}, status=status.HTTP_400_BAD_REQUEST)
-
-        if user_type not in ["player", "host"]:
-            return Response({"error": "user_type must be 'player' or 'host'"}, status=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            # Verify Google token and get user info
-            google_user_info = GoogleOAuth.verify_google_token(token)
-
-            if not google_user_info.get("email_verified"):
-                return Response({"error": "Google email not verified"}, status=status.HTTP_400_BAD_REQUEST)
-
-            email = google_user_info["email"]
-
-            # Check if user already exists
-            try:
-                user = User.objects.get(email=email)
-
-                # Check if user type matches
-                if user.user_type != user_type:
-                    return Response(
-                        {"error": f"This email is already registered as a {user.user_type}"},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-
-                # User exists, log them in
-                message = "Login successful!"
-
-            except User.DoesNotExist:
-                # User doesn't exist
-
-                # If this is a login attempt (not signup), return error
-                if not is_signup:
-                    return Response(
-                        {
-                            "error": "account_not_found",
-                            "message": "No account found with this email. Please sign up first.",
-                            "redirect": "signup",
-                        },
-                        status=status.HTTP_404_NOT_FOUND,
-                    )
-
-                # This is a signup - allow missing username/phone and auto-generate username
-                # Phone will be optional; users can fill it later in settings
-                # Generate a username from Google given_name or email local-part
-                import re
-
-                raw_username = username or google_user_info.get("given_name") or email.split("@")[0]
-                # sanitize: keep alphanumerics and underscore
-                base = re.sub(r"[^0-9a-zA-Z_]", "", raw_username)[:24] or "player"
-                candidate = base
-                suffix = 0
-                while User.objects.filter(username=candidate).exists():
-                    suffix += 1
-                    candidate = f"{base}{suffix}"
-
-                final_username = candidate
-
-                phone_value = phone_number or ""
-
-                # Create user without password (Google OAuth users)
-                user = User.objects.create(
-                    email=email,
-                    username=final_username,
-                    user_type=user_type,
-                    phone_number=phone_value,
-                    is_email_verified=True,  # Google already verified email
-                    is_active=True,  # Activate account immediately
-                )
-
-                # Set unusable password for OAuth users
-                user.set_unusable_password()
-                user.save()
-
-                # Create corresponding profile
-                if user_type == "player":
-                    PlayerProfile.objects.create(user=user)
-                else:
-                    HostProfile.objects.create(user=user)
-
-                # Send welcome email asynchronously
-                if user_type == "player":
-                    dashboard_url = f"{settings.CORS_ALLOWED_ORIGINS[0]}/player/dashboard"
-                else:
-                    dashboard_url = f"{settings.CORS_ALLOWED_ORIGINS[0]}/host/dashboard"
-
-                send_welcome_email_task.delay(
-                    user_email=user.email, user_name=user.username, dashboard_url=dashboard_url, user_type=user_type
-                )
-                logger.info(f"Welcome email queued for Google OAuth {user_type}: {user.email}")
-
-                message = "Account created successfully!"
-                logger.debug(f"Google OAuth account created - ID: {user.id}, Username: {username}, Type: {user_type}")
-
-            # Generate JWT tokens
-            refresh = RefreshToken.for_user(user)
-
-            # Get profile data
-            if user_type == "player":
-                profile = PlayerProfile.objects.get(user=user)
-                profile_data = PlayerProfileSerializer(profile).data
-            else:
-                profile = HostProfile.objects.get(user=user)
-                profile_data = HostProfileSerializer(profile).data
-
-            return Response(
-                {
-                    "user": UserSerializer(user).data,
-                    "profile": profile_data,
-                    "tokens": {
-                        "refresh": str(refresh),
-                        "access": str(refresh.access_token),
-                    },
-                    "message": message,
-                },
-                status=status.HTTP_200_OK,
-            )
-
-        except ValueError as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            return Response({"error": f"Authentication failed: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
-class PlayerProfileView(generics.RetrieveUpdateAPIView):
-    """
-    Get and Update Player Profile
-    GET/PUT /api/accounts/player/profile/<id>/
-    """
-
-    queryset = PlayerProfile.objects.all()
-    serializer_class = PlayerProfileSerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-
-class CurrentPlayerProfileView(APIView):
-    """
-    Update current player's profile
-    PATCH /api/accounts/player/profile/me/
-    """
-
-    permission_classes = [permissions.IsAuthenticated]
-
-    def patch(self, request):
-        user = request.user
-        if user.user_type != "player":
-            return Response({"error": "Only players can update player profiles"}, status=status.HTTP_403_FORBIDDEN)
-
-        if not hasattr(user, "player_profile"):
-            return Response({"error": "Player profile not found"}, status=status.HTTP_404_NOT_FOUND)
-
-        serializer = PlayerProfileSerializer(user.player_profile, data=request.data, partial=True)
-        if serializer.is_valid():
-            serializer.save()
-            logger.debug(f"Player profile updated - User: {user.id}, Username: {user.username}")
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-class HostProfileView(generics.RetrieveUpdateAPIView):
-    """
-    Get and Update Host Profile
-    GET/PUT /api/accounts/host/profile/<id>/
-    """
-
-    queryset = HostProfile.objects.all()
-    serializer_class = HostProfileSerializer
-
-    def get_permissions(self):
-        if self.request.method == "GET":
-            return [permissions.AllowAny()]
-        return [permissions.IsAuthenticated()]
-
-
-class CurrentHostProfileView(APIView):
-    """
-    Update current host's profile
-    PATCH /api/accounts/host/profile/me/
-    """
-
-    permission_classes = [permissions.IsAuthenticated]
-
-    def patch(self, request):
-        user = request.user
-        if user.user_type != "host":
-            return Response({"error": "Only hosts can update host profiles"}, status=status.HTTP_403_FORBIDDEN)
-
-        if not hasattr(user, "host_profile"):
-            return Response({"error": "Host profile not found"}, status=status.HTTP_404_NOT_FOUND)
-
-        serializer = HostProfileSerializer(user.host_profile, data=request.data, partial=True)
-        if serializer.is_valid():
-            serializer.save()
-            logger.debug(f"Host profile updated - User: {user.id}, Username: {user.username}")
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-class UploadAadharView(APIView):
-    """
-    Upload Aadhar card for host verification
-    POST /api/accounts/host/upload-aadhar/
-    """
-
-    permission_classes = [permissions.IsAuthenticated]
-
-    def post(self, request):
-        user = request.user
-        if user.user_type != "host":
-            return Response({"error": "Only hosts can upload Aadhar cards"}, status=status.HTTP_403_FORBIDDEN)
-
-        if not hasattr(user, "host_profile"):
-            return Response({"error": "Host profile not found"}, status=status.HTTP_404_NOT_FOUND)
-
-        host_profile = user.host_profile
-
-        # Get uploaded files
-        aadhar_front = request.FILES.get("aadhar_card_front")
-        aadhar_back = request.FILES.get("aadhar_card_back")
-
-        if not aadhar_front or not aadhar_back:
-            return Response(
-                {"error": "Both front and back images of Aadhar card are required"}, status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Validate files using the model's validators
-        try:
-            validate_aadhar_image(aadhar_front)
-            validate_aadhar_image(aadhar_back)
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Update host profile
-        host_profile.aadhar_card_front = aadhar_front
-        host_profile.aadhar_card_back = aadhar_back
-        host_profile.aadhar_uploaded_at = timezone.now()
-        host_profile.verification_status = "pending"
-        host_profile.save()
-
-        return Response(
-            {
-                "message": "Aadhar card uploaded successfully. Your verification is pending admin approval.",
-                "verification_status": host_profile.verification_status,
-                "aadhar_uploaded_at": host_profile.aadhar_uploaded_at,
-            },
-            status=status.HTTP_200_OK,
-        )
-
-
-class CurrentUserView(APIView):
-    """
-    Get and Update current logged-in user details
-    GET/PATCH /api/accounts/me/
-    """
-
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get(self, request):
-        user = request.user
-        # Get game filter from query params (default: 'ALL')
-        game_filter = request.query_params.get('game', 'ALL')
-        
-        serializer = UserSerializer(user, context={"request": request})
-
-        profile_data = None
-        if user.user_type == "player" and hasattr(user, "player_profile"):
-            profile_data = PlayerProfileSerializer(
-                user.player_profile, 
-                context={"request": request, "game_filter": game_filter}
-            ).data
-        elif user.user_type == "host" and hasattr(user, "host_profile"):
-            profile_data = HostProfileSerializer(user.host_profile, context={"request": request}).data
-
-        return Response({"user": serializer.data, "profile": profile_data}, status=status.HTTP_200_OK)
-
-    def patch(self, request):
-        user = request.user
-        data = request.data.copy()
-
-        # Email cannot be changed
-        if "email" in data:
-            del data["email"]
-
-        # Username change restriction logic
-        new_username = data.get("username")
-        if new_username and new_username != user.username:
-            # If they have already changed it once
-            if user.username_change_count > 0:
-                # Check if 6 months (approx 180 days) have passed
-                if user.last_username_change:
-                    six_months_ago = timezone.now() - timedelta(days=180)
-                    if user.last_username_change > six_months_ago:
-                        days_left = (user.last_username_change + timedelta(days=180) - timezone.now()).days
-                        return Response(
-                            {
-                                "error": (
-                                    f"Username can only be changed once every 6 months. "
-                                    f"Please try again in {days_left} days."
-                                )
-                            },
-                            status=status.HTTP_400_BAD_REQUEST,
-                        )
-
-            # Increment change count and update timestamp
-            user.username_change_count += 1
-            user.last_username_change = timezone.now()
-            user.save()
-
-        # Update user fields
-        serializer = UserSerializer(user, data=data, partial=True, context={"request": request})
-        if serializer.is_valid():
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-class UserDetailView(APIView):
-    """
-    Get any user's public profile by ID
-    GET /api/accounts/users/{id}/
-    """
-
-    permission_classes = [permissions.AllowAny]  # Allow guests to view profiles
-
-    def get(self, request, pk):
-        try:
-            user = User.objects.get(pk=pk)
-        except User.DoesNotExist:
-            return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
-
-        serializer = UserSerializer(user)
-
-        profile_data = None
-        if user.user_type == "player" and hasattr(user, "player_profile"):
-            profile_data = PlayerProfileSerializer(user.player_profile).data
-        elif user.user_type == "host" and hasattr(user, "host_profile"):
-            profile_data = HostProfileSerializer(user.host_profile).data
-
-        return Response({"user": serializer.data, "profile": profile_data}, status=status.HTTP_200_OK)
-
-
-class PlayerUsernameSearchView(APIView):
-    """
-    Search for players by username (for team registration autocomplete)
-    GET /api/accounts/players/search/?q=<username>
-    Returns list of matching player usernames and details
-    """
-
-    permission_classes = [permissions.AllowAny]  # Allow guests to search
-
-    def get(self, request):
-        query = request.query_params.get("q", "").strip()
-        for_team = request.query_params.get("for_team", "false").lower() == "true"
-
-        if not query or len(query) < 2:
-            return Response({"results": []}, status=status.HTTP_200_OK)
-
-        # Base query - search for players by username
-        players = PlayerProfile.objects.filter(
-            user__username__icontains=query, user__user_type="player"
-        ).select_related("user")
-
-        # If searching for team creation, apply additional filters
-        if for_team:
-            # Get all user IDs who are already in PERMANENT teams
-            users_in_teams = TeamMember.objects.filter(team__is_temporary=False).values_list("user_id", flat=True)
-
-            # EXCLUDE players who are already in permanent teams
-            players = players.exclude(user_id__in=users_in_teams)
-
-            # Exclude current user if authenticated (they're already the captain)
-            if request.user.is_authenticated:
-                players = players.exclude(user=request.user)
-
-        # Apply slice AFTER all filters
-        players = players[:10]
-
-        results = [
-            {
-                "id": player.user.id,
-                "username": player.user.username,
-                "email": player.user.email,
-                "profile_picture": player.user.profile_picture.url if player.user.profile_picture else None,
-                "in_team": TeamMember.objects.filter(user=player.user, team__is_temporary=False).exists()
-                if not for_team
-                else False,
-            }
-            for player in players
-        ]
-
-        # Handle absolute URLs if request is available
-        for res in results:
-            if res["profile_picture"] and not res["profile_picture"].startswith("http"):
-                res["profile_picture"] = request.build_absolute_uri(res["profile_picture"])
-
-        logger.debug(f"Player search results - Query: {query}, For Team: {for_team}, Results: {len(results)}")
-        return Response({"results": results}, status=status.HTTP_200_OK)
-
-
-class HostSearchView(APIView):
-    """
-    Search for hosts by username or organization name
-    GET /api/accounts/hosts/search/?q=<query>
-    Returns list of matching hosts and details
-    """
-
-    permission_classes = [permissions.AllowAny]  # Allow guests to search
-
-    def get(self, request):
-        query = request.query_params.get("q", "").strip()
-
-        if not query or len(query) < 2:
-            return Response({"results": []}, status=status.HTTP_200_OK)
-
-        # Search for hosts by username
-        hosts = HostProfile.objects.filter(user__username__icontains=query, user__user_type="host").select_related(
-            "user"
-        )[
-            :10
-        ]  # Limit to 10 results
-
-        results = [
-            {
-                "id": host.id,  # Return host profile ID
-                "username": host.user.username,
-                "email": host.user.email,
-                "verified": host.verified,
-                "profile_picture": host.user.profile_picture.url if host.user.profile_picture else None,
-            }
-            for host in hosts
-        ]
-
-        # Handle absolute URLs if request is available
-        for res in results:
-            if res["profile_picture"] and not res["profile_picture"].startswith("http"):
-                res["profile_picture"] = request.build_absolute_uri(res["profile_picture"])
-
-        logger.debug(f"Host search results - Query: {query}, Results: {len(results)}")
-        return Response({"results": results}, status=status.HTTP_200_OK)
 
 
 class IsPlayerUser(permissions.BasePermission):
@@ -1109,8 +416,6 @@ class TeamViewSet(viewsets.ModelViewSet):
     def my_tournament_invites(self, request):
         """
         Get pending tournament registration invites matched by the logged-in user's email.
-        These are invites sent by captains during tournament registration where
-        invite_token is set but player is not yet linked (player=None or invited_email matches).
         """
         email = request.user.email
         invites = TeamJoinRequest.objects.filter(
@@ -1311,8 +616,6 @@ class TeamViewSet(viewsets.ModelViewSet):
 
             # Check if this team won (check winners JSON field)
             if tournament.winners:
-                # Winners is a dict like {'1': reg_id, '2': reg_id} for each round
-                # The final round winner is the tournament winner
                 final_round = str(tournament.get_total_rounds())
                 if final_round in tournament.winners and tournament.winners[final_round] == reg.id:
                     placement = "1st Place - Winner"
@@ -1377,6 +680,7 @@ class TeamViewSet(viewsets.ModelViewSet):
 
         return Response(tournaments_data, status=status.HTTP_200_OK)
 
+
 # ============================================================================
 # TEAM INVITE ENDPOINTS (Invite-Based Registration Flow)
 # ============================================================================
@@ -1386,7 +690,7 @@ class RetrieveInviteDetailsView(APIView):
     """
     Retrieve invite details before accepting/declining.
     GET /api/accounts/invites/<token>/
-    
+
     Permission: AllowAny (guests can view invite details)
     """
 
@@ -1437,7 +741,7 @@ class AcceptInviteView(APIView):
     """
     Accept invite and join the team.
     POST /api/accounts/invites/<token>/accept/
-    
+
     Permission: IsAuthenticated (user must be logged in)
     """
 
@@ -1482,9 +786,7 @@ class AcceptInviteView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # ================================================================
         # ACCEPT LOGIC (within atomic transaction)
-        # ================================================================
         from django.db import transaction
 
         with transaction.atomic():
@@ -1521,7 +823,7 @@ class AcceptInviteView(APIView):
                         is_captain=False,
                     )
                     logger.info(f"Created new team member for {user.username} in team {team.name}")
-            
+
             # Clean up any duplicate team member entries (keep one, prefer captain)
             all_members = TeamMember.objects.filter(team=team, user=user).order_by('-is_captain', 'id')
             if all_members.count() > 1:
@@ -1566,7 +868,7 @@ class DeclineInviteView(APIView):
     """
     Decline invite without joining the team.
     POST /api/accounts/invites/<token>/decline/
-    
+
     Permission: AllowAny (allow declining without login)
     """
 
@@ -1586,9 +888,7 @@ class DeclineInviteView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # ================================================================
         # DECLINE LOGIC
-        # ================================================================
         from django.db import transaction
 
         with transaction.atomic():
