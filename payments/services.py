@@ -35,10 +35,15 @@ class PhonePeService:
     def _initialize_client(self):
         """Initialize PhonePe SDK client"""
         try:
-            client_id = config("CLIENT_ID")
-            client_secret = config("CLIENT_SECRET")
-            client_version = config("CLIENT_VERSION", cast=int)
+            client_id = config("CLIENT_ID", default=None)
+            client_secret = config("CLIENT_SECRET", default=None)
+            client_version = config("CLIENT_VERSION", default=1, cast=int)
             phonepe_env = config("PHONEPE_ENV", default="SANDBOX")
+
+            if not client_id or not client_secret:
+                logger.warning("PhonePe CLIENT_ID or CLIENT_SECRET not configured — payments disabled")
+                self._client = None
+                return
 
             # Set environment
             env = Env.SANDBOX if phonepe_env == "SANDBOX" else Env.PRODUCTION
@@ -56,7 +61,7 @@ class PhonePeService:
 
         except Exception as e:
             logger.error(f"Failed to initialize PhonePe client: {str(e)}")
-            raise
+            self._client = None
 
     def get_client(self):
         """Get PhonePe client instance"""
