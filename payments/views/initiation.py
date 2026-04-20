@@ -16,7 +16,9 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from accounts.models import HostProfile, PlayerProfile, Team, TeamMember, User
+from django.db.models import Sum
+
+from accounts.models import HostProfile, Notification, PlayerProfile, Team, TeamMember, User
 from payments.models import Payment
 from payments.serializers import (
     InitiatePaymentSerializer,
@@ -24,7 +26,7 @@ from payments.serializers import (
     PaymentStatusSerializer,
 )
 from payments.services import phonepe_service
-from tournaments.models import Tournament, TournamentRegistration
+from tournaments.models import Tournament, TournamentRegistration, RoundScore
 from tournaments.services_registration import process_successful_registration
 from tournaments.tasks import (
     send_registration_limit_reached_email_task,
@@ -473,6 +475,51 @@ def check_payment_status(request):
 
                             logger.info(f"Registration success emails queued for {len(team_members_data) + 1} players")
 
+                            # Notify host of new registration
+                            try:
+                                Notification.objects.create(
+                                    user=tournament.host.user,
+                                    type='new_registration',
+                                    title='New Team Registered',
+                                    message=f'Team "{team_name}" has registered for your tournament "{tournament.title}".',
+                                    related_id=tournament.id,
+                                    related_type='tournament',
+                                )
+                            except Exception as e:
+                                logger.warning(f"Failed to create host registration notification: {e}")
+
+                            # Notify captain (and team members) that payment & registration is confirmed
+                            try:
+                                event_label = "Scrim" if tournament.event_mode == "SCRIM" else "Tournament"
+                                notif_message = f'Your payment for "{tournament.title}" was successful. Registration is confirmed!'
+                                notif_title = f'{event_label} Registration Confirmed'
+                                # Notify captain
+                                Notification.objects.create(
+                                    user=player.user,
+                                    type='payment_confirmed',
+                                    title=notif_title,
+                                    message=notif_message,
+                                    related_id=tournament.id,
+                                    related_type='tournament',
+                                )
+                                # Notify team members
+                                for member_data in team_members_data:
+                                    if member_data.get("is_registered") and member_data.get("player_id"):
+                                        try:
+                                            member_player = PlayerProfile.objects.get(id=member_data["player_id"])
+                                            Notification.objects.create(
+                                                user=member_player.user,
+                                                type='payment_confirmed',
+                                                title=notif_title,
+                                                message=notif_message,
+                                                related_id=tournament.id,
+                                                related_type='tournament',
+                                            )
+                                        except PlayerProfile.DoesNotExist:
+                                            pass
+                            except Exception as e:
+                                logger.warning(f"Failed to create payment confirmation notifications: {e}")
+
                             # Check if tournament is full - send slots filled email to host
                             registration_count = TournamentRegistration.objects.filter(
                                 tournament=tournament, status="confirmed"
@@ -489,6 +536,18 @@ def check_payment_status(request):
                                     tournament_manage_url=f"{frontend_url}/host/tournaments/{tournament.id}/manage",
                                 )
                                 logger.info(f"Slots filled email sent to host: {tournament.host.user.email}")
+                                # Notify host that slots are full
+                                try:
+                                    Notification.objects.create(
+                                        user=tournament.host.user,
+                                        type='slots_full',
+                                        title='Tournament Slots Full',
+                                        message=f'All {tournament.max_participants} slots for "{tournament.title}" have been filled.',
+                                        related_id=tournament.id,
+                                        related_type='tournament',
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"Failed to create slots_full notification: {e}")
 
                             # Clear registration_data from meta_info (no longer needed)
                             payment.meta_info.pop("registration_data", None)
@@ -557,3 +616,179 @@ def list_payments(request):
     except Exception as e:
         logger.error(f"Error listing payments: {str(e)}")
         return Response({"error": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def player_earnings(request):
+    """
+    Calculate prize money earned by the authenticated player from completed tournaments.
+
+    Logic:
+    1. Find all completed tournaments where this player's team is registered
+    2. For each tournament, determine team's final placement from the last round's standings
+    3. Map placement to prize_distribution JSON to get prize amount
+    4. Return earnings list + summary stats
+    """
+    try:
+        user = request.user
+
+        # Get all registrations for this player in completed tournaments
+        registrations = TournamentRegistration.objects.filter(
+            player__user=user,
+            status="confirmed",
+            tournament__status="completed",
+        ).select_related("tournament", "team")
+
+        earnings = []
+        total_earned = 0
+        total_won = 0  # Count of tournaments where player earned prize money
+
+        for reg in registrations:
+            tournament = reg.tournament
+            prize_dist = tournament.prize_distribution or {}
+
+            if not prize_dist:
+                continue
+
+            # Determine total rounds
+            round_count = 1
+            if tournament.rounds and isinstance(tournament.rounds, list):
+                round_count = len(tournament.rounds)
+            elif tournament.current_round:
+                round_count = tournament.current_round
+
+            # Get final round standings — all teams sorted by total_points desc
+            final_scores = RoundScore.objects.filter(
+                tournament=tournament,
+                round_number=round_count,
+            ).order_by("-total_points")
+
+            if not final_scores.exists():
+                # Fallback: try round 1 (single-round tournaments / scrims)
+                final_scores = RoundScore.objects.filter(
+                    tournament=tournament,
+                    round_number=1,
+                ).order_by("-total_points")
+
+            if not final_scores.exists():
+                continue
+
+            # Find this team's position in final standings
+            position = None
+            for idx, score in enumerate(final_scores, start=1):
+                if score.team_id == reg.id:
+                    position = idx
+                    break
+
+            if position is None:
+                continue
+
+            # Map position to prize_distribution key
+            # prize_distribution can have keys like "1st", "2nd", "3rd" or "1", "2", "3"
+            position_keys = [
+                f"{position}",  # "1", "2", "3"
+            ]
+            # Add ordinal suffix versions
+            if position == 1:
+                position_keys.append("1st")
+            elif position == 2:
+                position_keys.append("2nd")
+            elif position == 3:
+                position_keys.append("3rd")
+            else:
+                position_keys.append(f"{position}th")
+
+            prize_amount = 0
+            for key in position_keys:
+                if key in prize_dist:
+                    try:
+                        prize_amount = float(prize_dist[key])
+                    except (ValueError, TypeError):
+                        pass
+                    break
+
+            if prize_amount > 0:
+                total_earned += prize_amount
+                total_won += 1
+                earnings.append({
+                    "id": f"earning-{reg.id}",
+                    "tournament_id": tournament.id,
+                    "tournament_title": tournament.title,
+                    "game_name": tournament.game_name or "",
+                    "amount": prize_amount,
+                    "position": position,
+                    "date": tournament.tournament_end.isoformat() if tournament.tournament_end else tournament.updated_at.isoformat(),
+                    "type": "winnings",
+                })
+
+        # Sort by date descending
+        earnings.sort(key=lambda e: e["date"], reverse=True)
+
+        return Response(
+            {
+                "total_earned": total_earned,
+                "total_won": total_won,
+                "earnings": earnings,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    except Exception as e:
+        logger.error(f"Error calculating player earnings: {str(e)}")
+        return Response({"error": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def host_transactions(request):
+    """
+    Returns entry-fee payment data grouped by tournament for the authenticated host.
+    Each tournament includes total_revenue, scrimverse_fee (10%), team_count, and
+    a list of individual payment rows.
+    """
+    try:
+        host_profile = HostProfile.objects.get(user=request.user)
+    except HostProfile.DoesNotExist:
+        return Response({"error": "Host profile not found"}, status=status.HTTP_403_FORBIDDEN)
+
+    tournaments = Tournament.objects.filter(host=host_profile).order_by("-created_at")
+    result = []
+
+    for t in tournaments:
+        payments = (
+            Payment.objects.filter(
+                tournament=t,
+                payment_type="entry_fee",
+                status="completed",
+            )
+            .select_related("registration", "user")
+            .order_by("created_at")
+        )
+
+        payment_rows = []
+        for p in payments:
+            team_name = ""
+            if p.registration:
+                team_name = p.registration.team_name or ""
+            if not team_name:
+                team_name = p.user.username if p.user else "Unknown"
+            payment_rows.append({
+                "team_name": team_name,
+                "amount": str(p.amount),
+                "paid_at": p.completed_at or p.created_at,
+            })
+
+        total_revenue = float(sum(p.amount for p in payments))
+        result.append({
+            "id": t.id,
+            "title": t.title,
+            "game_name": t.game_name or "",
+            "entry_fee": str(t.entry_fee or 0),
+            "total_revenue": str(total_revenue),
+            "scrimverse_fee": str(round(total_revenue * 0.10, 2)),
+            "team_count": len(payment_rows),
+            "payments": payment_rows,
+        })
+
+    return Response({"tournaments": result})

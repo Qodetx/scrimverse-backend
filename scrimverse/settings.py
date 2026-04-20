@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     "accounts",
     "tournaments",
     "payments",
+    "communications",
 ]
 
 MIDDLEWARE = [
@@ -189,7 +190,26 @@ SIMPLE_JWT = {
 # CORS Settings
 CORS_ALLOWED_ORIGINS = [o for o in config("CORS_ALLOWED_ORIGINS", default="http://localhost:3000,http://127.0.0.1:3000,https://scrimverse.com,https://www.scrimverse.com").split(",") if o]
 
+# Allow all Vercel preview deployments (*.vercel.app) — safe for development
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://.*\.vercel\.app$",
+    r"^https://.*\.ngrok-free\.app$",
+]
+
 CORS_ALLOW_CREDENTIALS = True
+
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "accept-encoding",
+    "authorization",
+    "content-type",
+    "dnt",
+    "origin",
+    "user-agent",
+    "x-csrftoken",
+    "x-requested-with",
+    "ngrok-skip-browser-warning",
+]
 
 # CSRF Settings
 CSRF_TRUSTED_ORIGINS = [o for o in config("CSRF_TRUSTED_ORIGINS", default="http://localhost:3000,http://127.0.0.1:3000,https://scrimverse.com,https://www.scrimverse.com").split(",") if o]
@@ -294,35 +314,39 @@ LOGGING = {
         },
         "file_general": {
             "level": "INFO",
-            "class": "logging.handlers.RotatingFileHandler",
+            "class": "concurrent_log_handler.ConcurrentRotatingFileHandler",
             "filename": BASE_DIR / "logs" / "django.log",
             "maxBytes": 1024 * 1024 * 10,  # 10 MB
             "backupCount": 5,
             "formatter": "verbose",
+            "encoding": "utf-8",
         },
         "file_error": {
             "level": "ERROR",
-            "class": "logging.handlers.RotatingFileHandler",
+            "class": "concurrent_log_handler.ConcurrentRotatingFileHandler",
             "filename": BASE_DIR / "logs" / "django_error.log",
             "maxBytes": 1024 * 1024 * 10,  # 10 MB
             "backupCount": 5,
             "formatter": "verbose",
+            "encoding": "utf-8",
         },
         "file_api": {
             "level": "DEBUG",
-            "class": "logging.handlers.RotatingFileHandler",
+            "class": "concurrent_log_handler.ConcurrentRotatingFileHandler",
             "filename": BASE_DIR / "logs" / "api.log",
             "maxBytes": 1024 * 1024 * 10,  # 10 MB
             "backupCount": 5,
             "formatter": "verbose",
+            "encoding": "utf-8",
         },
         "file_celery": {
             "level": "INFO",
-            "class": "logging.handlers.RotatingFileHandler",
+            "class": "concurrent_log_handler.ConcurrentRotatingFileHandler",
             "filename": BASE_DIR / "logs" / "celery.log",
             "maxBytes": 1024 * 1024 * 10,  # 10 MB
             "backupCount": 5,
             "formatter": "verbose",
+            "encoding": "utf-8",
         },
     },
     "loggers": {
@@ -387,3 +411,8 @@ ADMIN_EMAIL = config("ADMIN_EMAIL", default="admin@scrimverse.com").strip()
 # Email Settings
 EMAIL_TIMEOUT = 10  # seconds
 EMAIL_USE_LOCALTIME = True
+
+# ==================== AWS SNS (SMS) CONFIGURATION ====================
+AWS_SNS_ACCESS_KEY_ID = config("AWS_SNS_ACCESS_KEY_ID", default="")
+AWS_SNS_SECRET_ACCESS_KEY = config("AWS_SNS_SECRET_ACCESS_KEY", default="")
+AWS_SNS_REGION = config("AWS_SNS_REGION", default="ap-south-1")

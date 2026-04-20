@@ -32,18 +32,13 @@ class Command(BaseCommand):
                     continue
 
                 teams = list(group.teams.all())
-                if len(teams) != 2:
-                    # only handle 2-team head-to-head groups
+                if not teams:
                     continue
-
-                team_a = teams[0]
-                team_b = teams[1]
 
                 for match in group.matches.all().order_by("match_number"):
                     # Start match
                     if match.status == "waiting":
                         match.match_id = match.match_id or f"AUTO-{match.id}-{timezone.now().strftime('%Y%m%d%H%M%S')}"
-                        match.match_password = "" if tournament.requires_password() is False else match.match_password
                         match.status = "ongoing"
                         match.started_at = timezone.now()
                         match.save()
@@ -53,32 +48,17 @@ class Command(BaseCommand):
                     match.ended_at = timezone.now()
                     match.save()
 
-                    # Create deterministic scores: team_a wins match 1 and 3, team_b wins match 2
-                    # Determine winner pattern by match_number
-                    if match.match_number in [1, 3]:
-                        winner_reg = team_a
-                        loser_reg = team_b
-                    else:
-                        winner_reg = team_b
-                        loser_reg = team_a
-
-                    # Avoid duplicate scores
-                    if not MatchScore.objects.filter(match=match, team=winner_reg).exists():
+                    # Give each team deterministic scores varying by position
+                    for i, team in enumerate(teams):
+                        if MatchScore.objects.filter(match=match, team=team).exists():
+                            continue
+                        # First team gets highest points, descending
                         MatchScore.objects.create(
                             match=match,
-                            team=winner_reg,
-                            wins=1,
-                            position_points=13,
-                            kill_points=25,
-                        )
-
-                    if not MatchScore.objects.filter(match=match, team=loser_reg).exists():
-                        MatchScore.objects.create(
-                            match=match,
-                            team=loser_reg,
-                            wins=0,
-                            position_points=8,
-                            kill_points=18,
+                            team=team,
+                            wins=1 if i == 0 else 0,
+                            position_points=max(1, 15 - i * 2),
+                            kill_points=max(0, 20 - i * 3),
                         )
 
                     # Determine match winner and update round aggregates

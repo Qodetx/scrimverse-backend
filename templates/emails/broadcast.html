@@ -1,0 +1,24 @@
+{% extends "emails/base.html" %}
+
+{% block title %}{{ subject }} - Scrimverse{% endblock %}
+
+{% block content %}
+<div class="status-pill">Official Communication</div>
+<h2 style="color: #ffffff; font-size: 22px; margin-bottom: 16px;">{{ subject }}</h2>
+
+<div class="content-box">
+    {% for line in body_lines %}
+        {% if line %}
+            <p>{{ line }}</p>
+        {% else %}
+            <br>
+        {% endif %}
+    {% endfor %}
+</div>
+
+<p style="font-size: 13px; color: #555555; margin-top: 24px;">
+    This message was sent by the Scrimverse admin team.
+    If you have questions, contact us at
+    <a href="mailto:support@scrimverse.com" style="color: #c0ff00;">support@scrimverse.com</a>.
+</p>
+{% endblock %}

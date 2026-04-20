@@ -8,9 +8,25 @@ from accounts.email_verification_views import (
     SendVerificationEmailView,
     VerifyEmailView,
 )
+from accounts.analytics_views import (
+    PlayerAnalyticsActivityView,
+    PlayerAnalyticsRecentResultsView,
+    PlayerAnalyticsStatsView,
+    PlayerAnalyticsTrendView,
+    PlayerAnalyticsWeeklyActivityView,
+    PlayerAnalyticsWeeklyTrendView,
+)
 from accounts.leaderboard_views import LeaderboardView, TeamRankView
+from accounts.notification_views import (
+    NotificationListView,
+    NotificationMarkReadView,
+    NotificationMarkAllReadView,
+    NotificationDeleteView,
+    NotificationBulkActionView,
+)
 from accounts.password_reset_views import RequestPasswordResetView, ResetPasswordView, VerifyResetTokenView
 from accounts.views import (
+    ChangePasswordView,
     CurrentHostProfileView,
     CurrentPlayerProfileView,
     CurrentUserView,
@@ -28,6 +44,15 @@ from accounts.views import (
     RetrieveInviteDetailsView,
     AcceptInviteView,
     DeclineInviteView,
+    SendOTPView,
+    UpdatePhoneView,
+    SendRegistrationOTPView,
+    VerifyRegistrationOTPView,
+    ExportDataView,
+    DeleteAccountView,
+    RequestDataExportView,
+    DataExportDetailView,
+    DataExportPDFView,
 )
 
 router = DefaultRouter()
@@ -50,6 +75,16 @@ urlpatterns = [
     path("reset-password/<str:token>/", ResetPasswordView.as_view(), name="reset-password"),
     # Profile Management (must be before router to avoid conflicts)
     path("me/", CurrentUserView.as_view(), name="current-user"),
+    path("change-password/", ChangePasswordView.as_view(), name="change-password"),
+    path("send-otp/", SendOTPView.as_view(), name="send-otp"),
+    path("update-phone/", UpdatePhoneView.as_view(), name="update-phone"),
+    path("send-registration-otp/", SendRegistrationOTPView.as_view(), name="send-registration-otp"),
+    path("verify-registration-otp/", VerifyRegistrationOTPView.as_view(), name="verify-registration-otp"),
+    path("export-data/", ExportDataView.as_view(), name="export-data"),
+    path("request-data-export/", RequestDataExportView.as_view(), name="request-data-export"),
+    path("data-export/<uuid:token>/", DataExportDetailView.as_view(), name="data-export-detail"),
+    path("data-export/<uuid:token>/pdf/", DataExportPDFView.as_view(), name="data-export-pdf"),
+    path("delete-account/", DeleteAccountView.as_view(), name="delete-account"),
     path("users/<int:pk>/", UserDetailView.as_view(), name="user-detail"),
     path("player/profile/<int:pk>/", PlayerProfileView.as_view(), name="player-profile"),
     path("player/profile/me/", CurrentPlayerProfileView.as_view(), name="current-player-profile"),
@@ -59,6 +94,13 @@ urlpatterns = [
     # Search
     path("players/search/", PlayerUsernameSearchView.as_view(), name="player-username-search"),
     path("hosts/search/", HostSearchView.as_view(), name="host-search"),
+    # Player Analytics
+    path("players/analytics/stats/", PlayerAnalyticsStatsView.as_view(), name="player-analytics-stats"),
+    path("players/analytics/trend/", PlayerAnalyticsTrendView.as_view(), name="player-analytics-trend"),
+    path("players/analytics/activity/", PlayerAnalyticsActivityView.as_view(), name="player-analytics-activity"),
+    path("players/analytics/weekly-activity/", PlayerAnalyticsWeeklyActivityView.as_view(), name="player-analytics-weekly-activity"),
+    path("players/analytics/weekly-trend/", PlayerAnalyticsWeeklyTrendView.as_view(), name="player-analytics-weekly-trend"),
+    path("players/analytics/recent-results/", PlayerAnalyticsRecentResultsView.as_view(), name="player-analytics-recent-results"),
     # Leaderboard
     path("leaderboard/", LeaderboardView.as_view(), name="leaderboard"),
     path("teams/<int:team_id>/rank/", TeamRankView.as_view(), name="team-rank"),
@@ -66,6 +108,12 @@ urlpatterns = [
     path("invites/<str:token>/", RetrieveInviteDetailsView.as_view(), name="invite-details"),
     path("invites/<str:token>/accept/", AcceptInviteView.as_view(), name="invite-accept"),
     path("invites/<str:token>/decline/", DeclineInviteView.as_view(), name="invite-decline"),
+    # Notifications
+    path("notifications/", NotificationListView.as_view(), name="notifications-list"),
+    path("notifications/mark-all-read/", NotificationMarkAllReadView.as_view(), name="notifications-mark-all-read"),
+    path("notifications/bulk/", NotificationBulkActionView.as_view(), name="notifications-bulk"),
+    path("notifications/<int:pk>/", NotificationDeleteView.as_view(), name="notification-delete"),
+    path("notifications/<int:pk>/read/", NotificationMarkReadView.as_view(), name="notification-mark-read"),
     # Router URLs (must be last)
     path("", include(router.urls)),
 ]

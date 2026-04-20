@@ -5,6 +5,7 @@ from tournaments.views import (  # Tournament URLs; Registration URLs; Rating UR
     EndRoundView,
     EndTournamentView,
     HostDashboardStatsView,
+    HostAnalyticsView,
     HostRatingCreateView,
     HostRatingsListView,
     HostTournamentsView,
@@ -35,6 +36,7 @@ from tournaments.views import (  # Tournament URLs; Registration URLs; Rating UR
     RoundResultsView,
     StartMatchView,
     EndMatchView,
+    UpdateMatchCredentialsView,
     SubmitMatchScoresView,
     GetTeamPlayersView,
 )
@@ -45,6 +47,7 @@ urlpatterns = [
     # Platform Stats
     path("stats/platform/", PlatformStatsView.as_view(), name="platform-stats"),
     path("stats/host/", HostDashboardStatsView.as_view(), name="host-stats"),
+    path("stats/host/analytics/", HostAnalyticsView.as_view(), name="host-analytics"),
     # Tournament endpoints
     path("", TournamentListView.as_view(), name="tournament-list"),
     path("<int:pk>/", TournamentDetailView.as_view(), name="tournament-detail"),
@@ -91,6 +94,7 @@ urlpatterns = [
     # Match Management (Old Implementation)
     path("<int:tournament_id>/groups/<int:group_id>/matches/start/", StartMatchView.as_view(), name="start-match"),
     path("<int:tournament_id>/matches/<int:match_id>/end/", EndMatchView.as_view(), name="end-match"),
+    path("<int:tournament_id>/matches/<int:match_id>/credentials/", UpdateMatchCredentialsView.as_view(), name="update-match-credentials"),
     path(
         "<int:tournament_id>/matches/<int:match_id>/scores/",
         SubmitMatchScoresView.as_view(),

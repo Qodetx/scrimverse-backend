@@ -151,12 +151,18 @@ class VerifyEmailView(APIView):
             access_token = str(refresh.access_token)
             refresh_token = str(refresh)
 
+            # Consume and return the post-verify redirect URL if stored
+            post_verify_redirect = user.post_verify_redirect or None
+            if user.post_verify_redirect:
+                user.post_verify_redirect = None
+                user.save(update_fields=["post_verify_redirect"])
+
             response_data = {
                 "message": "Email verified successfully! Your account is now active. Redirecting to your dashboard...",
                 "user": {
                     "email": user.email,
                     "username": user.username,
-                    "user_type": user.user_type,  # Add user_type for frontend navigation
+                    "user_type": user.user_type,
                     "is_email_verified": user.is_email_verified,
                     "is_active": user.is_active,
                 },
@@ -164,6 +170,7 @@ class VerifyEmailView(APIView):
                     "access": access_token,
                     "refresh": refresh_token,
                 },
+                "next": post_verify_redirect,
             }
             logger.info(f"📤 Sending success response: {response_data}")
             return Response(response_data, status=status.HTTP_200_OK)

@@ -262,10 +262,90 @@ class TeamJoinRequestAdmin(admin.ModelAdmin):
 
     status_badge.short_description = "Status"
 
+    def _process_accept(self, join_request):
+        """Resolve player from phone/email, create TeamMember and update registration JSON."""
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+
+        # Resolve player FK if not set
+        if not join_request.player_id:
+            user = None
+            if join_request.phone_number:
+                user = User.objects.filter(phone_number=join_request.phone_number).first()
+            elif join_request.invited_email:
+                user = User.objects.filter(email=join_request.invited_email).first()
+            if user:
+                join_request.player = user
+                join_request.save(update_fields=["player"])
+
+        if not join_request.player_id:
+            return  # Cannot resolve player — skip
+
+        player_user = join_request.player
+
+        # Create TeamMember if missing
+        TeamMember.objects.get_or_create(
+            team=join_request.team,
+            user=player_user,
+            defaults={"role": "Member"},
+        )
+
+        # Update registration JSON fields
+        registration = join_request.tournament_registration
+        if not registration:
+            return
+
+        # invited_members_status
+        if not registration.invited_members_status:
+            registration.invited_members_status = {}
+        match_key = join_request.phone_number or join_request.invited_email or player_user.username
+        for contact_key, member_status in registration.invited_members_status.items():
+            if contact_key.lower() == match_key.lower():
+                member_status["status"] = "accepted"
+                member_status["username"] = player_user.username
+                break
+
+        # team_members JSON
+        if registration.team_members:
+            player_profile = getattr(player_user, 'playerprofile', None)
+            player_id = player_profile.id if player_profile else None
+            for member in registration.team_members:
+                member_matched = False
+                if join_request.invite_type == 'phone' and member.get('phone') == join_request.phone_number:
+                    member_matched = True
+                elif join_request.invite_type == 'username' and member.get('username', '').lower() == player_user.username.lower():
+                    member_matched = True
+                elif join_request.invite_type == 'email' and member.get('email', '').lower() == (join_request.invited_email or '').lower():
+                    member_matched = True
+                if member_matched:
+                    member['username'] = player_user.username
+                    member['player_id'] = player_id
+                    member['is_registered'] = True
+                    break
+
+        registration.save(update_fields=["invited_members_status", "team_members", "updated_at"])
+
+    def save_model(self, request, obj, form, change):
+        """When status changes to accepted in admin detail view, create TeamMember + update reg."""
+        old_status = None
+        if change and obj.pk:
+            try:
+                old_status = TeamJoinRequest.objects.get(pk=obj.pk).status
+            except TeamJoinRequest.DoesNotExist:
+                pass
+        super().save_model(request, obj, form, change)
+        if obj.status == "accepted" and old_status != "accepted":
+            self._process_accept(obj)
+
     def approve_requests(self, request, queryset):
-        """Approve selected requests"""
-        updated = queryset.update(status="accepted")
-        self.message_user(request, f"{updated} request(s) approved.")
+        """Approve selected requests and create TeamMembers + update registration JSON."""
+        count = 0
+        for join_request in queryset.filter(status="pending"):
+            join_request.status = "accepted"
+            join_request.save(update_fields=["status"])
+            self._process_accept(join_request)
+            count += 1
+        self.message_user(request, f"{count} request(s) approved and members added.")
 
     approve_requests.short_description = "Approve Requests"
 

@@ -173,9 +173,11 @@ class TournamentGroupService:
 
         for team in group.teams.all():
             # Aggregate scores from all matches in this group
-            match_scores = MatchScore.objects.filter(match__group=group, team=team).aggregate(
+            match_scores_qs = MatchScore.objects.filter(match__group=group, team=team)
+            match_scores = match_scores_qs.aggregate(
                 total_pp=Sum("position_points"), total_kp=Sum("kill_points"), total_wins=Sum("wins")
             )
+            matches_count = match_scores_qs.count()
 
             total_points = (match_scores["total_pp"] or 0) + (match_scores["total_kp"] or 0)
 
@@ -187,6 +189,7 @@ class TournamentGroupService:
                     "kill_points": match_scores["total_kp"] or 0,
                     "wins": match_scores["total_wins"] or 0,
                     "total_points": total_points,
+                    "matches_played": MatchScore.objects.filter(match__group=group, team=team).count(),
                 }
             )
 
@@ -278,6 +281,7 @@ class TournamentGroupService:
                 'match_wins': team_a_wins,
                 'total_points': team_a_total_pts,
                 'total_kills': team_a_total_kills,
+                'matches_played': matches.filter(scores__team=team_a).count(),
             },
             'team_b': {
                 'team_id': team_b.id,
@@ -285,6 +289,7 @@ class TournamentGroupService:
                 'match_wins': team_b_wins,
                 'total_points': team_b_total_pts,
                 'total_kills': team_b_total_kills,
+                'matches_played': matches.filter(scores__team=team_b).count(),
             },
             'match_results': match_results,
             'series_score': {

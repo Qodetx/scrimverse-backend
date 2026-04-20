@@ -8,6 +8,7 @@ class PaymentSerializer(serializers.ModelSerializer):
 
     user_username = serializers.CharField(source="user.username", read_only=True)
     tournament_title = serializers.CharField(source="tournament.title", read_only=True)
+    tournament_game_name = serializers.CharField(source="tournament.game_name", read_only=True)
 
     class Meta:
         model = Payment
@@ -25,6 +26,7 @@ class PaymentSerializer(serializers.ModelSerializer):
             "host_profile",
             "tournament",
             "tournament_title",
+            "tournament_game_name",
             "registration",
             "status",
             "payment_mode",

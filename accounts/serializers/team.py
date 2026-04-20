@@ -14,7 +14,7 @@ class TeamMemberSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = TeamMember
-        fields = ("id", "username", "user", "is_captain")
+        fields = ("id", "username", "user", "is_captain", "role")
 
 
 class TeamSerializer(serializers.ModelSerializer):
@@ -25,27 +25,31 @@ class TeamSerializer(serializers.ModelSerializer):
     user_request_status = serializers.SerializerMethodField()
     stats_by_game = serializers.SerializerMethodField()
     overall_stats = serializers.SerializerMethodField()
+    linked_tournament_info = serializers.SerializerMethodField()
 
     def get_members(self, obj):
         """Get all team members INCLUDING the captain, excluding captain from TeamMember list to avoid duplication"""
         members_list = []
 
         # Add captain first as a unified entry
+        captain_pic = obj.captain.profile_picture.url if obj.captain.profile_picture else None
         captain_member = {
             'id': obj.captain.id,
             'username': obj.captain.username,
             'email': obj.captain.email,
-            'role': 'captain',
+            'profile_picture': captain_pic,
+            'role': 'Captain',
             'is_captain': True,
             'join_date': obj.created_at.isoformat() if obj.created_at else None,
         }
         members_list.append(captain_member)
 
         # Add non-captain team members only (exclude captain's TeamMember entry to avoid showing them twice)
-        other_members = obj.members.exclude(
-            username=obj.captain.username
-        )
+        other_members = obj.members.exclude(username=obj.captain.username)
         other_members_data = TeamMemberSerializer(other_members, many=True).data
+        # Force is_captain=False for all non-captain members (stale flag after captaincy transfer)
+        for m in other_members_data:
+            m['is_captain'] = False
         members_list.extend(other_members_data)
 
         return members_list
@@ -78,6 +82,15 @@ class TeamSerializer(serializers.ModelSerializer):
 
         return stats_dict
 
+    def get_linked_tournament_info(self, obj):
+        if obj.linked_tournament:
+            return {
+                "id": obj.linked_tournament.id,
+                "title": obj.linked_tournament.title,
+                "registration_end": obj.linked_tournament.registration_end,
+            }
+        return None
+
     def get_overall_stats(self, obj):
         """Get aggregate statistics across all games - aggregate from game-specific rows"""
         # Aggregate wins and points from all game-specific rows (exclude 'ALL')
@@ -89,6 +102,9 @@ class TeamSerializer(serializers.ModelSerializer):
             total_scrim_pos=Sum('scrim_position_points'),
             total_scrim_kills=Sum('scrim_kill_points'),
             total_points_sum=Sum('total_points'),
+            total_matches=Sum('matches_played'),
+            total_tournament_matches=Sum('tournament_matches_played'),
+            total_scrim_matches=Sum('scrim_matches_played'),
         )
 
         # Get ranks from the 'ALL' row (ranks are calculated separately)
@@ -96,6 +112,12 @@ class TeamSerializer(serializers.ModelSerializer):
 
         tournament_points = (aggregated['total_tournament_pos'] or 0) + (aggregated['total_tournament_kills'] or 0)
         scrim_points = (aggregated['total_scrim_pos'] or 0) + (aggregated['total_scrim_kills'] or 0)
+        total_kills = (aggregated['total_tournament_kills'] or 0) + (aggregated['total_scrim_kills'] or 0)
+        tournament_kills = aggregated['total_tournament_kills'] or 0
+        scrim_kills = aggregated['total_scrim_kills'] or 0
+        matches_played = aggregated['total_matches'] or 0
+        tournament_matches = aggregated['total_tournament_matches'] or 0
+        scrim_matches = aggregated['total_scrim_matches'] or 0
 
         return {
             'tournament_wins': aggregated['total_tournament_wins'] or 0,
@@ -106,6 +128,12 @@ class TeamSerializer(serializers.ModelSerializer):
             'rank': all_stats.rank if all_stats else 0,
             'tournament_rank': all_stats.tournament_rank if all_stats else 0,
             'scrim_rank': all_stats.scrim_rank if all_stats else 0,
+            'total_kills': total_kills,
+            'tournament_kills': tournament_kills,
+            'scrim_kills': scrim_kills,
+            'matches_played': matches_played,
+            'tournament_matches': tournament_matches,
+            'scrim_matches': scrim_matches,
         }
 
     class Meta:
@@ -120,6 +148,9 @@ class TeamSerializer(serializers.ModelSerializer):
             "members",
             "created_at",
             "is_temporary",
+            "conversion_deadline",
+            "linked_tournament_info",
+            "game",
             "total_matches",
             "wins",
             "losses",
@@ -158,6 +189,9 @@ class TeamStatisticsSerializer(serializers.ModelSerializer):
             "total_position_points",
             "total_kill_points",
             "total_points",
+            "matches_played",
+            "tournament_matches_played",
+            "scrim_matches_played",
             "last_updated",
         )
 

@@ -16,7 +16,7 @@ from django.views.decorators.csrf import csrf_exempt
 
 from decouple import config
 
-from accounts.models import HostProfile, PlayerProfile, Team, TeamMember, User
+from accounts.models import HostProfile, Notification, PlayerProfile, Team, TeamMember, User
 from payments.models import Payment, Refund
 from tournaments.models import Tournament, TournamentRegistration
 from tournaments.services_registration import process_successful_registration
@@ -253,7 +253,10 @@ def phonepe_callback(request):
                                         )
                                 else:
                                     team_instance = Team.objects.create(
-                                        name=team_name, captain=player.user, is_temporary=True
+                                        name=team_name,
+                                        captain=player.user,
+                                        is_temporary=True,
+                                        linked_tournament=tournament
                                     )
 
                                 # Prepare team members data
@@ -340,6 +343,49 @@ def phonepe_callback(request):
                                     f"Registration emails queued from webhook for {len(team_members_data) + 1} players"
                                 )
 
+                                # Notify host of new registration
+                                try:
+                                    Notification.objects.create(
+                                        user=tournament.host.user,
+                                        type='new_registration',
+                                        title='New Team Registered',
+                                        message=f'Team "{team_name}" has registered for your tournament "{tournament.tournament_name}".',
+                                        related_id=tournament.id,
+                                        related_type='tournament',
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"Failed to create host registration notification: {e}")
+
+                                # Notify captain (and team members) that payment & registration is confirmed
+                                try:
+                                    event_label = "Scrim" if tournament.event_mode == "SCRIM" else "Tournament"
+                                    notif_message = f'Your payment for "{tournament.tournament_name}" was successful. Registration is confirmed!'
+                                    notif_title = f'{event_label} Registration Confirmed'
+                                    Notification.objects.create(
+                                        user=player.user,
+                                        type='payment_confirmed',
+                                        title=notif_title,
+                                        message=notif_message,
+                                        related_id=tournament.id,
+                                        related_type='tournament',
+                                    )
+                                    for member_data in team_members_data:
+                                        if member_data.get("is_registered") and member_data.get("player_id"):
+                                            try:
+                                                member_player = PlayerProfile.objects.get(id=member_data["player_id"])
+                                                Notification.objects.create(
+                                                    user=member_player.user,
+                                                    type='payment_confirmed',
+                                                    title=notif_title,
+                                                    message=notif_message,
+                                                    related_id=tournament.id,
+                                                    related_type='tournament',
+                                                )
+                                            except PlayerProfile.DoesNotExist:
+                                                pass
+                                except Exception as e:
+                                    logger.warning(f"Failed to create payment confirmation notifications: {e}")
+
                                 # Check if tournament is full - send slots filled email to host
                                 registration_count = TournamentRegistration.objects.filter(
                                     tournament=tournament, status="confirmed"
@@ -358,6 +404,18 @@ def phonepe_callback(request):
                                     logger.info(
                                         f"Slots filled email sent from webhook to host: {tournament.host.user.email}"
                                     )
+                                    # Notify host that slots are full
+                                    try:
+                                        Notification.objects.create(
+                                            user=tournament.host.user,
+                                            type='slots_full',
+                                            title='Tournament Slots Full',
+                                            message=f'All {tournament.max_participants} slots for "{tournament.tournament_name}" have been filled.',
+                                            related_id=tournament.id,
+                                            related_type='tournament',
+                                        )
+                                    except Exception as e:
+                                        logger.warning(f"Failed to create slots_full notification: {e}")
 
                                 # Clear registration_data from meta_info (no longer needed)
                                 payment.meta_info.pop("registration_data", None)

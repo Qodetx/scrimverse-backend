@@ -8,7 +8,7 @@ from rest_framework import generics, permissions
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from accounts.models import HostProfile, PlayerProfile, TeamMember
+from accounts.models import HostProfile, Notification, PlayerProfile, TeamMember
 from tournaments.models import Group, RoundScore, Tournament, TournamentRegistration
 from tournaments.services import TournamentGroupService
 from tournaments.tasks import update_leaderboard
@@ -211,15 +211,59 @@ class ConfigureRoundView(generics.GenericAPIView):
         if not tournament.round_status:
             tournament.round_status = {}
 
-        # Preserve existing round metadata (like bye_team_id) and add status
-        round_key = str(round_number)
-        if isinstance(tournament.round_status.get(round_key), dict):
-            tournament.round_status[round_key]["status"] = "ongoing"
-        else:
-            tournament.round_status[round_key] = {"status": "ongoing"}
+        is_preconfigure = tournament.status == "upcoming"
 
-        tournament.current_round = round_number
-        tournament.save(update_fields=["round_status", "current_round"])
+        round_key = str(round_number)
+        if is_preconfigure:
+            # Pre-configure: save groups as draft — do NOT set ongoing or update current_round.
+            # This lets the host set up groups/bulk-schedule before the tournament starts,
+            # without exposing slot lists or sending notifications to players yet.
+            if isinstance(tournament.round_status.get(round_key), dict):
+                tournament.round_status[round_key]["status"] = "pre_configured"
+            else:
+                tournament.round_status[round_key] = {"status": "pre_configured"}
+            tournament.save(update_fields=["round_status"])
+            logger.info(
+                f"Round pre-configured (draft) - Tournament: {tournament.id}, Round: {round_number}"
+            )
+        else:
+            # Tournament already ongoing — set round as active and notify players.
+            if isinstance(tournament.round_status.get(round_key), dict):
+                tournament.round_status[round_key]["status"] = "ongoing"
+            else:
+                tournament.round_status[round_key] = {"status": "ongoing"}
+
+            tournament.current_round = round_number
+            tournament.save(update_fields=["round_status", "current_round"])
+
+            # Notify all confirmed registered players that groups have been assigned
+            try:
+                registrations = TournamentRegistration.objects.filter(
+                    tournament=tournament, status="confirmed"
+                ).select_related("team")
+                notifications = []
+                for reg in registrations:
+                    member_user_ids = TeamMember.objects.filter(
+                        team=reg.team, user__isnull=False
+                    ).values_list("user_id", flat=True)
+                    for user_id in member_user_ids:
+                        notifications.append(
+                            Notification(
+                                user_id=user_id,
+                                type="slot_list",
+                                title="Groups Assigned",
+                                message=f"Groups have been locked for {tournament.title}. Check your slot list!",
+                                related_id=tournament.id,
+                                related_type="tournament",
+                            )
+                        )
+                if notifications:
+                    Notification.objects.bulk_create(notifications)
+                    logger.info(
+                        f"Group assignment notifications sent - Tournament: {tournament.id}, Round: {round_number}, Players notified: {len(notifications)}"  # noqa E501
+                    )
+            except Exception as e:
+                logger.error(f"Failed to send group assignment notifications: {e}", exc_info=True)
 
         # Build response
         response_data = {
@@ -332,32 +376,62 @@ class RoundGroupsListView(generics.GenericAPIView):
 
     def get(self, request, tournament_id, round_number):
         # Check if user is host or player
+        is_host = False
+        player_registration = None
+
         try:
             host_profile = HostProfile.objects.get(user=request.user)
             tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
+            is_host = True
         except (HostProfile.DoesNotExist, Tournament.DoesNotExist):
             # If not a host, check if user is a registered player
             try:
                 player_profile = PlayerProfile.objects.get(user=request.user)
                 tournament = Tournament.objects.get(id=tournament_id)
 
-                # Check if player is registered as captain OR is a member of a registered team
-                is_captain = TournamentRegistration.objects.filter(
+                # Check if player is registered as captain
+                player_registration = TournamentRegistration.objects.filter(
                     tournament=tournament, player=player_profile
-                ).exists()
+                ).first()
 
-                # Check if player is a team member of any registered team
-                team_ids = TeamMember.objects.filter(user=request.user).values_list("team_id", flat=True)
-                is_team_member = TournamentRegistration.objects.filter(
-                    tournament=tournament, team_id__in=team_ids
-                ).exists()
+                if not player_registration:
+                    # Check if player is a team member of any registered team
+                    team_ids = TeamMember.objects.filter(user=request.user).values_list("team_id", flat=True)
+                    player_registration = TournamentRegistration.objects.filter(
+                        tournament=tournament, team_id__in=team_ids
+                    ).first()
 
-                if not (is_captain or is_team_member):
+                if not player_registration:
                     return Response({"error": "You are not registered for this tournament"}, status=403)
             except (PlayerProfile.DoesNotExist, Tournament.DoesNotExist):
                 return Response({"error": "Tournament not found or you don't have access"}, status=404)
 
-        groups = Group.objects.filter(tournament=tournament, round_number=round_number)
+        # Block players from seeing pre-configured (draft) groups — only the host can see them.
+        # Groups configured before the tournament starts are internal setup; players should
+        # only see groups once the tournament is ongoing and the round is active.
+        if not is_host:
+            round_key = str(round_number)
+            round_status_val = tournament.round_status.get(round_key) if tournament.round_status else None
+            if isinstance(round_status_val, dict):
+                round_status_str = round_status_val.get("status", "upcoming")
+            else:
+                round_status_str = round_status_val or "upcoming"
+            if round_status_str == "pre_configured":
+                return Response(
+                    {"error": f"No groups found for round {round_number}. Configure the round first."}, status=404
+                )
+
+        # Hosts see all groups; players only see their own group (CRITICAL security rule)
+        # Exception: scrims have no group assignment — all registered players see all groups
+        # Exception: completed tournaments — all registered players can see all rounds' results
+        is_scrim = tournament.event_mode == 'SCRIM'
+        is_completed = tournament.status == 'completed'
+        if is_host or is_scrim or is_completed:
+            groups = Group.objects.filter(tournament=tournament, round_number=round_number)
+        else:
+            groups = Group.objects.filter(
+                tournament=tournament, round_number=round_number, teams=player_registration
+            )
 
         if not groups.exists():
             return Response(
@@ -584,6 +658,36 @@ class RoundResultsView(generics.GenericAPIView):
                 tournament.save(update_fields=["winners", "status"])
                 # Trigger leaderboard update when tournament auto-completes via final round
                 update_leaderboard.delay()
+                # Winner notifications are now sent from EndTournamentView (manage.py) only.
+                # Commented out to avoid duplicate notifications when rounds.py and groups.py both fire.
+                # try:
+                #     registrations = TournamentRegistration.objects.filter(
+                #         tournament=tournament, status="confirmed"
+                #     ).select_related("team")
+                #     winner_team_name = winner.get("team_name", "Unknown Team")
+                #     notifications = []
+                #     for reg in registrations:
+                #         member_user_ids = TeamMember.objects.filter(
+                #             team=reg.team, user__isnull=False
+                #         ).values_list("user_id", flat=True)
+                #         for user_id in member_user_ids:
+                #             notifications.append(
+                #                 Notification(
+                #                     user_id=user_id,
+                #                     type="tournament_result",
+                #                     title="Winner Declared",
+                #                     message=f"{winner_team_name} has won {tournament.title}!",
+                #                     related_id=tournament.id,
+                #                     related_type="tournament",
+                #                 )
+                #             )
+                #     if notifications:
+                #         Notification.objects.bulk_create(notifications)
+                #         logger.info(
+                #             f"Winner notifications sent (auto-complete) - Tournament: {tournament.id}, Winner: {winner_team_name}, Players notified: {len(notifications)}"
+                #         )
+                # except Exception as e:
+                #     logger.error(f"Failed to send winner notifications (auto-complete): {e}", exc_info=True)
 
             return Response(
                 {

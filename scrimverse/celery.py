@@ -2,6 +2,7 @@
 Celery configuration for Scrimverse
 """
 import os
+from datetime import timedelta
 
 from celery import Celery
 from celery.schedules import crontab
@@ -49,6 +50,30 @@ app.conf.beat_schedule = {
     "send-tournament-reminders-1h": {
         "task": "tournaments.tasks.send_tournament_reminders_1h",
         "schedule": crontab(minute="*/5"),  # Run every 5 minutes
+    },
+    "notify-credential-release": {
+        "task": "tournaments.tasks.notify_credential_release",
+        "schedule": crontab(minute="*"),  # Run every minute
+    },
+    "notify-slot-list-release": {
+        "task": "tournaments.tasks.notify_slot_list_release",
+        "schedule": crontab(minute="*"),  # Run every minute
+    },
+    "notify-match-start": {
+        "task": "tournaments.tasks.notify_match_start",
+        "schedule": crontab(minute="*"),  # Run every minute
+    },
+    "check-temp-team-conversions": {
+        "task": "tournaments.tasks.check_temp_team_conversions",
+        "schedule": crontab(minute="*"),  # Run every minute, same as status updates
+    },
+    "cleanup-expired-temp-teams": {
+        "task": "tournaments.tasks.cleanup_expired_temp_teams",
+        "schedule": crontab(minute=30),  # Run every hour at minute 30
+    },
+    "send-temp-team-24h-reminders": {
+        "task": "tournaments.tasks.send_temp_team_24h_reminders",
+        "schedule": crontab(minute=15),  # Run every hour at minute 15
     },
 }
 

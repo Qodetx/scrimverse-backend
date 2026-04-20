@@ -9,6 +9,12 @@ from tournaments.tasks.tournament_tasks import (  # noqa: F401
     update_platform_statistics,
     update_host_dashboard_stats,
     refresh_all_host_dashboards,
+    notify_credential_release,
+    notify_slot_list_release,
+    notify_match_start,
+    check_temp_team_conversions,
+    cleanup_expired_temp_teams,
+    send_temp_team_24h_reminders,
 )
 
 from tournaments.tasks.score_tasks import (  # noqa: F401
@@ -24,6 +30,7 @@ from tournaments.tasks.email_tasks import (  # noqa: F401
     send_tournament_registration_email_task,
     send_player_tournament_reminder_email_task,
     send_host_approved_email_task,
+    send_host_rejected_email_task,
     send_tournament_created_email_task,
     send_tournament_reminder_email_task,
     send_registration_limit_reached_email_task,

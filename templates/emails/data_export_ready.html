@@ -1,0 +1,49 @@
+{% extends "emails/base.html" %}
+
+{% block title %}Your Data Export is Ready - Scrimverse{% endblock %}
+
+{% block content %}
+<div class="status-pill">Data Export</div>
+
+<h1 style="color: #ffffff; font-size: 32px; margin-bottom: 30px;">Your ScrimVerse Data is Ready</h1>
+
+<p>Hi {{ user_name }},</p>
+<p>You requested a copy of your ScrimVerse data. Your export is now ready and available for the next <strong>7 days</strong>.</p>
+
+<div class="content-box">
+    <h2 style="margin-bottom: 10px; font-size: 18px;">What's Included</h2>
+    <p style="font-size: 14px; margin-bottom: 5px;"><strong>1. ACCOUNT INFORMATION</strong> - Username, email, phone, member since</p>
+    <p style="font-size: 14px; margin-bottom: 5px;"><strong>2. GAMING PROFILES</strong> - All your in-game names and IDs</p>
+    <p style="font-size: 14px; margin-bottom: 5px;"><strong>3. TOURNAMENT HISTORY</strong> - All tournaments you've participated in</p>
+    <p style="font-size: 14px; margin-bottom: 5px;"><strong>4. TEAM HISTORY</strong> - Teams you've been part of</p>
+    <p style="font-size: 14px;"><strong>5. PAYMENT HISTORY</strong> - All your transactions</p>
+</div>
+
+<p>Choose how you'd like to view your data:</p>
+
+<div style="margin-top: 20px;">
+    <a href="{{ view_url }}" class="button" style="background-color: #c0ff00; color: #000000 !important; margin-right: 10px;">VIEW MY DATA</a>
+    <a href="{{ pdf_url }}" class="button" style="background-color: #ffffff; color: #000000 !important; margin-top: 10px;">DOWNLOAD PDF</a>
+</div>
+
+<div style="margin-top: 30px; border-top: 1px solid rgba(255, 255, 255, 0.1); padding-top: 20px;">
+    <p style="font-size: 12px; color: #666666;">
+        If the buttons don't work, copy and paste these links into your browser:<br><br>
+        <strong>View:</strong> <a href="{{ view_url }}" style="color: #c0ff00; word-break: break-all;">{{ view_url }}</a><br>
+        <strong>PDF:</strong> <a href="{{ pdf_url }}" style="color: #c0ff00; word-break: break-all;">{{ pdf_url }}</a>
+    </p>
+
+    <p style="font-size: 12px; color: #666666; margin-top: 10px;">
+        These links will expire in <strong>7 days</strong> on {{ expires_at }}.
+    </p>
+
+    <p style="font-size: 12px; color: #666666; margin-top: 10px;">
+        If you didn't request this data export, you can safely ignore this email. No one else can access your data without this link.
+    </p>
+
+    <div style="border-top: 1px solid rgba(255, 255, 255, 0.1); margin-top: 40px; padding-top: 20px;">
+        <p style="color: #ffffff; font-weight: 700; margin-bottom: 5px;">THE SCRIMVERSE TEAM</p>
+        <p style="color: #c0ff00; font-size: 12px; font-weight: 900; text-transform: uppercase; margin: 0;">Where Practice Meets Passion</p>
+    </div>
+</div>
+{% endblock %}

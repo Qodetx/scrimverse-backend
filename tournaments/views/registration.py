@@ -16,6 +16,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import HostProfile, PlayerProfile, Team, TeamMember, User
+from accounts.notification_utils import should_notify
 from payments.models import Payment
 from payments.services import phonepe_service
 from tournaments.models import Tournament, TournamentRegistration
@@ -69,7 +70,11 @@ class TournamentRegistrationInitiateView(APIView):
         # Get validated data
         validated_data = serializer.validated_data
         team_name = validated_data['team_name']
-        teammate_emails = validated_data['teammate_emails']  # Already normalized to lowercase
+        invite_mode = validated_data.get('invite_mode', 'email')
+        # Each mode stores its own validated data — no cross-mode resolution
+        teammate_emails = validated_data.get('teammate_emails', [])   # email mode
+        original_phones = validated_data.get('teammate_phones', [])   # phone mode
+        teammate_users = validated_data.get('teammate_users', [])     # username mode
 
         try:
             # Get player profile
@@ -85,7 +90,9 @@ class TournamentRegistrationInitiateView(APIView):
                 team = TeamModel.objects.create(
                     name=team_name,
                     captain=request.user,
-                    is_temporary=True
+                    is_temporary=True,
+                    linked_tournament=tournament,
+                    game=tournament.game_name
                 )
                 # Add captain as a team member
                 TeamMemberModel.objects.get_or_create(
@@ -93,6 +100,24 @@ class TournamentRegistrationInitiateView(APIView):
                     user=request.user,
                     defaults={'username': request.user.username, 'is_captain': True}
                 )
+
+            # Build the initial invited_members_status dict using the mode-appropriate contact keys
+            if invite_mode == 'phone':
+                contact_list = original_phones
+            elif invite_mode == 'username':
+                contact_list = [u.username for u in teammate_users]
+            else:
+                contact_list = teammate_emails
+
+            # For temp_teammate_emails we store only email-mode emails (field name is legacy)
+            stored_emails = teammate_emails if invite_mode == 'email' else []
+
+            # Build initial team_members with captain always first
+            initial_team_members = [{
+                'username': request.user.username,
+                'player_id': player_profile.id,
+                'is_registered': True,
+            }]
 
             # Create TournamentRegistration with status 'pending'
             registration = TournamentRegistration.objects.create(
@@ -102,9 +127,10 @@ class TournamentRegistrationInitiateView(APIView):
                 team_name=team_name,
                 status='pending',  # Using 'pending' as interim status
                 payment_status=False,
-                temp_teammate_emails=teammate_emails,  # Store emails temporarily
+                temp_teammate_emails=stored_emails,
                 is_team_created=False,
-                invited_members_status={email: {'status': 'pending', 'username': None} for email in teammate_emails}
+                team_members=initial_team_members,
+                invited_members_status={c: {'status': 'pending', 'username': None} for c in contact_list}
             )
 
             logger.info(
@@ -120,71 +146,158 @@ class TournamentRegistrationInitiateView(APIView):
 
                 try:
                     with transaction.atomic():
+                        # Re-check slot availability under lock to prevent race condition
+                        from django.db.models import F
+                        locked_t = Tournament.objects.select_for_update().get(id=tournament.id)
+                        if locked_t.current_participants >= locked_t.max_participants:
+                            raise ValidationError({"error": "Tournament is full."})
+
                         # Mark registration as confirmed immediately
                         registration.payment_status = True
                         registration.status = 'confirmed'
                         registration.save()
 
-                        # Update tournament participants count
-                        tournament.current_participants = (tournament.current_participants or 0) + 1
-                        tournament.save()
+                        # Update tournament participants count atomically
+                        Tournament.objects.filter(id=tournament.id).update(
+                            current_participants=F('current_participants') + 1
+                        )
+                        tournament.refresh_from_db(fields=['current_participants'])
 
-                    # Build team_members snapshot from emails and create TeamJoinRequest records
+                    # Build team_members snapshot and create TeamJoinRequest records
+                    # Each invite mode is fully independent — no cross-mode resolution.
                     team_members = []
-                    invited_partners = []  # For invite emails
+                    invited_partners = []
+                    from accounts.models import Notification
 
-                    for email in teammate_emails:
-                        try:
-                            member_user = User.objects.get(email__iexact=email, user_type='player')
-                            player_id = getattr(member_user.player_profile, 'id', None)
-                            username = member_user.username
-                            is_registered = True
-                        except Exception:
-                            member_user = None
-                            player_id = None
-                            username = None
-                            is_registered = False
-
-                        team_members.append({
-                            'email': email,
-                            'username': username,
-                            'player_id': player_id,
-                            'is_registered': is_registered,
-                        })
-
-                        # Create TeamJoinRequest with invite token for ALL teammates
-                        invite_token = str(uuid4())
-                        invite_expires = timezone.now() + timezone.timedelta(days=7)
-
-                        team = registration.team
-                        if not team:
-                            team, _ = Team.objects.get_or_create(
-                                name=registration.team_name,
-                                captain=player_profile.user,
-                                defaults={'is_temporary': False},
-                            )
-
-                        # Create join request with invite token
-                        TeamJoinRequest.objects.create(
-                            team=team,
-                            player=member_user if is_registered else None,
-                            status='pending',
-                            request_type='invite',
-                            invite_token=invite_token,
-                            invited_email=email,
-                            invite_expires_at=invite_expires,
-                            tournament_registration=registration,
+                    team = registration.team
+                    if not team:
+                        team, _ = Team.objects.get_or_create(
+                            name=registration.team_name,
+                            captain=player_profile.user,
+                            defaults={'is_temporary': False},
                         )
 
-                        invited_partners.append({
-                            'invited_email': email,
-                            'invite_token': invite_token,
-                            'invite_expires_at': invite_expires.strftime('%B %d, %Y'),
-                        })
+                    if invite_mode == 'phone':
+                        # Phone mode: phones are already normalised (10-digit) by the serializer
+                        for phone in original_phones:
+                            invite_token = str(uuid4())
+                            invite_expires = timezone.now() + timezone.timedelta(days=7)
 
-                    # Save team_members (non-critical)
+                            TeamJoinRequest.objects.create(
+                                team=team,
+                                player=None,  # unknown until user accepts
+                                status='pending',
+                                request_type='invite',
+                                invite_type='phone',
+                                phone_number=phone,
+                                invite_token=invite_token,
+                                invite_expires_at=invite_expires,
+                                tournament_registration=registration,
+                            )
+
+                            team_members.append({
+                                'phone': phone,
+                                'username': None,
+                                'player_id': None,
+                                'is_registered': False,
+                            })
+
+                            # Send SMS
+                            try:
+                                from scrimverse.sms_utils import send_team_invite_sms
+                                send_team_invite_sms(
+                                    phone_number=f'+91{phone}',
+                                    captain_name=request.user.username,
+                                    team_name=team.name,
+                                    invite_token=invite_token,
+                                )
+                            except Exception as e:
+                                logger.error(f'Failed to send SMS to {phone}: {e}')
+
+                    elif invite_mode == 'username':
+                        # Username mode: teammate_users are resolved User objects from serializer
+                        for user_obj in teammate_users:
+                            invite_token = str(uuid4())
+                            invite_expires = timezone.now() + timezone.timedelta(days=7)
+
+                            TeamJoinRequest.objects.create(
+                                team=team,
+                                player=user_obj,
+                                status='pending',
+                                request_type='invite',
+                                invite_type='username',
+                                invite_token=invite_token,
+                                invite_expires_at=invite_expires,
+                                tournament_registration=registration,
+                            )
+
+                            team_members.append({
+                                'username': user_obj.username,
+                                'player_id': getattr(getattr(user_obj, 'player_profile', None), 'id', None),
+                                'is_registered': True,
+                            })
+
+                            # In-app notification
+                            if should_notify(user_obj, 'teamInvites'):
+                                Notification.objects.create(
+                                    user=user_obj,
+                                    type='team_invite',
+                                    title='Tournament Team Invite',
+                                    message=f'{request.user.username} has invited you to join team "{team.name}" for tournament "{tournament.title}".',
+                                    related_id=team.id,
+                                    related_type='team',
+                                )
+
+                    else:
+                        # Email mode: iterate validated email strings
+                        for email in teammate_emails:
+                            try:
+                                member_user = User.objects.get(email__iexact=email, user_type='player')
+                                player_id = getattr(getattr(member_user, 'player_profile', None), 'id', None)
+                                username = member_user.username
+                                is_registered = True
+                            except Exception:
+                                member_user = None
+                                player_id = None
+                                username = None
+                                is_registered = False
+
+                            invite_token = str(uuid4())
+                            invite_expires = timezone.now() + timezone.timedelta(days=7)
+
+                            TeamJoinRequest.objects.create(
+                                team=team,
+                                player=member_user if is_registered else None,
+                                status='pending',
+                                request_type='invite',
+                                invite_type='email',
+                                invited_email=email,
+                                invite_token=invite_token,
+                                invite_expires_at=invite_expires,
+                                tournament_registration=registration,
+                            )
+
+                            team_members.append({
+                                'email': email,
+                                'username': username,
+                                'player_id': player_id,
+                                'is_registered': is_registered,
+                            })
+
+                            invited_partners.append({
+                                'invited_email': email,
+                                'invite_token': invite_token,
+                                'invite_expires_at': invite_expires.strftime('%B %d, %Y'),
+                            })
+
+                    # Save team_members — captain always first, then invitees
+                    captain_entry = {
+                        'username': request.user.username,
+                        'player_id': player_profile.id,
+                        'is_registered': True,
+                    }
                     try:
-                        registration.team_members = team_members
+                        registration.team_members = [captain_entry] + team_members
                         registration.save()
                     except Exception as e:
                         logger.warning(f'Failed to save team_members for registration {registration.id}: {e}')
@@ -209,8 +322,8 @@ class TournamentRegistrationInitiateView(APIView):
                     except Exception as e:
                         logger.error(f'Failed to queue captain registration email: {e}')
 
-                    # Queue invite emails to ALL teammates
-                    if invited_partners:
+                    # Queue invite emails only for email-mode invites
+                    if invited_partners and invite_mode == 'email':
                         try:
                             send_team_invite_emails_task.delay(registration_id=registration.id)
                         except Exception as e:
@@ -221,7 +334,8 @@ class TournamentRegistrationInitiateView(APIView):
                         'registration_id': registration.id,
                         'status': registration.status,
                         'team_name': registration.team_name,
-                        'invited_emails': teammate_emails,
+                        'invited_contacts': contact_list,
+                        'invite_mode': invite_mode,
                         'entry_fee': str(tournament.entry_fee),
                         'tournament_name': tournament.title,
                         'message': 'Registration confirmed for free tournament. Invitations sent to teammates.'
@@ -235,7 +349,7 @@ class TournamentRegistrationInitiateView(APIView):
                 'registration_id': registration.id,
                 'status': registration.status,
                 'team_name': registration.team_name,
-                'invited_emails': teammate_emails,
+                'invited_contacts': contact_list,
                 'entry_fee': str(tournament.entry_fee),
                 'tournament_name': tournament.title,
                 'message': 'Registration initiated. Proceed to payment to confirm.'
@@ -353,13 +467,13 @@ class TournamentRegistrationCreateView(generics.CreateAPIView):
         )
         for registration in confirmed_registrations:
             if registration.team_members:
-                registered_player_ids = {member.get("id") for member in registration.team_members if member.get("id")}
+                registered_player_ids = {member.get("player_id") for member in registration.team_members if member.get("player_id")}
                 overlapping_ids = team_player_ids & registered_player_ids
                 if overlapping_ids:
                     registered_usernames = [
                         member.get("username")
                         for member in registration.team_members
-                        if member.get("id") in overlapping_ids
+                        if member.get("player_id") in overlapping_ids
                     ]
                     raise ValidationError(
                         {
@@ -471,8 +585,23 @@ class TournamentRegistrationCreateView(generics.CreateAPIView):
                 raise ValidationError({"error": "Internal server error"})
 
         else:
-            # NO PAYMENT REQUIRED - Create registration directly
-            registration = serializer.save(player_id=player_profile.id, tournament_id=tournament_id)
+            # NO PAYMENT REQUIRED - Create registration directly (atomic to prevent race condition)
+            from django.db import transaction
+            from django.db.models import F as F_expr
+            with transaction.atomic():
+                locked_t = Tournament.objects.select_for_update().get(id=tournament_id)
+                confirmed_count_now = TournamentRegistration.objects.filter(
+                    tournament=locked_t, status="confirmed"
+                ).count()
+                if confirmed_count_now >= locked_t.max_participants:
+                    raise ValidationError({"error": "Tournament is full"})
+
+                registration = serializer.save(player_id=player_profile.id, tournament_id=tournament_id)
+
+                Tournament.objects.filter(id=tournament_id).update(
+                    current_participants=F_expr('current_participants') + 1
+                )
+                tournament.refresh_from_db(fields=['current_participants'])
 
             logger.info(
                 f"Registration created - ID: {registration.id}, Player: {player_profile.user.username}, Tournament: {tournament.title}, Team: {registration.team_name}"  # noqa E501
@@ -564,12 +693,12 @@ class PlayerPublicRegistrationsView(generics.ListAPIView):
         player_id = self.kwargs["player_id"]
 
         try:
-            player = PlayerProfile.objects.get(id=player_id)
+            player = PlayerProfile.objects.get(user_id=player_id)
             user = player.user
             team_ids = TeamMember.objects.filter(user=user).values_list("team_id", flat=True)
 
             queryset = TournamentRegistration.objects.filter(
-                Q(player_id=player_id) | Q(team_id__in=team_ids)
+                Q(player_id=player.id) | Q(team_id__in=team_ids)
             ).distinct()
         except PlayerProfile.DoesNotExist:
             return TournamentRegistration.objects.none()

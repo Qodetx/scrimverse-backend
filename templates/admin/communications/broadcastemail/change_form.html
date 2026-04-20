@@ -1,0 +1,20 @@
+{% extends "admin/change_form.html" %}
+{% load i18n admin_urls static %}
+
+{% block submit_buttons_bottom %}
+    {% if not is_sent %}
+    <div class="submit-row" style="padding: 10px; border-top: 1px solid #eee; margin-top: 20px; background: #f8f1ff; border: 1px solid #e1bee7; border-radius: 4px;">
+        <input type="submit" value="🚀 SAVE & SEND BROADCAST NOW" name="_send_now_form" style="background: #6200ea; color: white; border-radius: 4px; padding: 10px 24px; font-weight: bold; cursor: pointer; border: none; margin-right: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">
+        <p style="display: inline-block; color: #4a148c; font-size: 13px; margin: 0; font-weight: 500;">
+            <b>Immediate Action:</b> This will save all changes and start the email broadcast to the selected recipients right now.
+        </p>
+    </div>
+    {% else %}
+    <div class="submit-row" style="padding: 10px; border-top: 1px solid #eee; margin-top: 20px; background: #f5f5f5; border: 1px solid #ddd; border-radius: 4px;">
+        <p style="color: #666; font-size: 14px; margin: 0; font-weight: bold;">
+            ✅ This broadcast has already been sent or is currently sending. Editing is restricted.
+        </p>
+    </div>
+    {% endif %}
+    {{ block.super }}
+{% endblock %}

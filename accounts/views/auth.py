@@ -38,6 +38,32 @@ class PlayerRegistrationView(generics.CreateAPIView):
 
     def create(self, request, *args, **kwargs):
         email = request.data.get("email")
+        phone_number = request.data.get("phone_number", "").strip()
+        otp_verified_token = request.data.get("otp_verified_token", "").strip()
+        next_url = request.data.get("next", "").strip() or None
+
+        # Validate phone OTP verification token
+        if phone_number:
+            from django.core.cache import cache
+            digits = "".join(c for c in phone_number if c.isdigit())
+            if digits.startswith("91") and len(digits) == 12:
+                digits = digits[2:]
+            if digits.startswith("0") and len(digits) == 11:
+                digits = digits[1:]
+            if not otp_verified_token:
+                return Response(
+                    {"error": "Phone number must be verified via OTP before registration."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            verified_key = f"otp_verified:reg:{digits}"
+            stored_token = cache.get(verified_key)
+            if not stored_token or stored_token != otp_verified_token:
+                return Response(
+                    {"error": "Phone verification expired or invalid. Please verify your phone again."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            # Token is valid — will be consumed after successful registration (not here)
+            pass
 
         # Check if user already exists with this email
         if email:
@@ -65,8 +91,34 @@ class PlayerRegistrationView(generics.CreateAPIView):
                 pass
 
         serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+        if not serializer.is_valid():
+            # Return validation errors without consuming the OTP token
+            # Flatten errors so the frontend gets a readable message
+            errors = serializer.errors
+            flat_errors = []
+            for field, msgs in errors.items():
+                for msg in msgs:
+                    flat_errors.append(str(msg))
+            return Response(
+                {"error": "; ".join(flat_errors), "field_errors": errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         user = serializer.save()
+
+        # Store post-verify redirect URL if provided
+        if next_url:
+            user.post_verify_redirect = next_url
+            user.save(update_fields=["post_verify_redirect"])
+
+        # Token is valid — consume it now that registration succeeded (one-time use)
+        if phone_number and otp_verified_token:
+            from django.core.cache import cache as _cache
+            _digits = "".join(c for c in phone_number if c.isdigit())
+            if _digits.startswith("91") and len(_digits) == 12:
+                _digits = _digits[2:]
+            if _digits.startswith("0") and len(_digits) == 11:
+                _digits = _digits[1:]
+            _cache.delete(f"otp_verified:reg:{_digits}")
 
         # Generate verification token
         verification_token = secrets.token_urlsafe(32)
@@ -74,8 +126,13 @@ class PlayerRegistrationView(generics.CreateAPIView):
         user.email_verification_sent_at = timezone.now()
         user.is_email_verified = False  # Explicitly set to False
         user.is_active = False  # Deactivate account until email is verified
+
+        # Mark phone as verified if OTP was verified
+        if phone_number and otp_verified_token:
+            user.is_phone_verified = True
+
         user.save(
-            update_fields=["email_verification_token", "email_verification_sent_at", "is_email_verified", "is_active"]
+            update_fields=["email_verification_token", "email_verification_sent_at", "is_email_verified", "is_active", "is_phone_verified"]
         )
 
         # Send verification email (NOT welcome email)
@@ -229,6 +286,10 @@ class LoginView(APIView):
         # Generate JWT tokens
         refresh = RefreshToken.for_user(user)
 
+        # Update last_login timestamp (required for new user indicator)
+        from django.contrib.auth.models import update_last_login
+        update_last_login(None, user)
+
         logger.info(f"Login successful - User ID: {user.id}, Username: {user.username}, Type: {user.user_type}")
 
         return Response(
@@ -358,6 +419,10 @@ class GoogleAuthView(APIView):
             # Generate JWT tokens
             refresh = RefreshToken.for_user(user)
 
+            # Update last_login timestamp (required for new user indicator)
+            from django.contrib.auth.models import update_last_login
+            update_last_login(None, user)
+
             # Get profile data
             if user_type == "player":
                 profile = PlayerProfile.objects.get(user=user)
@@ -450,3 +515,47 @@ class CurrentUserView(APIView):
             serializer.save()
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class ChangePasswordView(APIView):
+    """
+    Change password for authenticated user
+    POST /api/accounts/change-password/
+    Body: { current_password, new_password }
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        current_password = request.data.get("current_password", "")
+        new_password = request.data.get("new_password", "")
+        otp_input = request.data.get("otp", "")
+
+        if not current_password or not new_password or not otp_input:
+            return Response(
+                {"error": "current_password, new_password, and otp are required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if len(new_password) < 8:
+            return Response(
+                {"error": "New password must be at least 8 characters"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not user.check_password(current_password):
+            return Response({"error": "Current password is incorrect"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Verify OTP (Redis-based, one-time use)
+        from accounts.views.otp_views import verify_otp
+        if not verify_otp("password_change", user.id, otp_input):
+            return Response(
+                {"error": "Invalid or expired OTP. Please request a new one."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user.set_password(new_password)
+        user.save()
+        logger.info(f"Password changed - User: {user.id}")
+        return Response({"message": "Password changed successfully"}, status=status.HTTP_200_OK)

@@ -46,13 +46,6 @@ class TournamentSerializer(serializers.ModelSerializer):
         if value and value.size > 5 * 1024 * 1024:  # 5MB
             raise serializers.ValidationError("Banner image size should not exceed 5MB")
 
-        # Check if banner upload is allowed (premium plan only)
-        if value:
-            plan_type = self.initial_data.get("plan_type", "basic")
-            if plan_type != "premium":
-                raise serializers.ValidationError(
-                    "Custom banner upload is only available for Premium plan. Upgrade to Premium to upload custom banners."  # noqa E501
-                )
         return value
 
     def validate_max_participants(self, value):
@@ -211,6 +204,8 @@ class TournamentListSerializer(serializers.ModelSerializer):
             "rounds",
             "current_round",
             "round_names",
+            "credential_release_time",
+            "slot_list_release_time",
         )
 
     def get_is_registered(self, obj):

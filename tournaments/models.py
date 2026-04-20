@@ -70,6 +70,13 @@ class Tournament(models.Model):
         default=6, help_text="Maximum number of matches (for scrims, max 6; for tournaments, based on rounds)"
     )
 
+    # Map selections per match index — e.g. {"1": "Erangel", "2": "Miramar"}
+    match_maps = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Map selections per match index, e.g. {1: 'Erangel', 2: 'Miramar'}",
+    )
+
     # Prize Distribution (stored as JSON)
     prize_distribution = models.JSONField(default=dict, blank=True)  # {"1st": 5000, "2nd": 3000, "3rd": 2000}
 
@@ -80,6 +87,16 @@ class Tournament(models.Model):
     registration_end = models.DateTimeField()
     tournament_start = models.DateTimeField()
     tournament_end = models.DateTimeField()
+
+    # Release timers — host sets when credentials/slot list become visible to players
+    credential_release_time = models.DateTimeField(
+        null=True, blank=True,
+        help_text="When room ID & password become visible to registered players",
+    )
+    slot_list_release_time = models.DateTimeField(
+        null=True, blank=True,
+        help_text="When slot list becomes visible to registered players",
+    )
 
     # Rounds Structure - Dynamic rounds with qualification criteria
     rounds = models.JSONField(

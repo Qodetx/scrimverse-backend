@@ -12,9 +12,10 @@ from django.utils import timezone
 from celery import shared_task
 from PIL import Image
 
-from accounts.models import HostProfile, PlayerProfile, TeamJoinRequest
+from accounts.models import HostProfile, Notification, PlayerProfile, Team, TeamJoinRequest, TeamMember
+from accounts.notification_utils import should_notify
 from payments.models import Payment
-from tournaments.models import RoundScore, Tournament, TournamentRegistration
+from tournaments.models import Match, RoundScore, Tournament, TournamentRegistration
 from tournaments.services import TournamentGroupService
 
 logger = logging.getLogger(__name__)
@@ -29,12 +30,9 @@ def update_tournament_statuses():
     now = timezone.now()
     updated_count = 0
 
-    # Update upcoming → ongoing
-    upcoming = Tournament.objects.filter(status="upcoming", tournament_start__lte=now)
-    for tournament in upcoming:
-        tournament.status = "ongoing"
-        tournament.save(update_fields=["status"])
-        updated_count += 1
+    # NOTE: upcoming → ongoing is intentionally NOT auto-triggered here.
+    # The host must manually click "Start Tournament" to move a tournament to ongoing.
+    # The tournament_start time only controls when the Start button unlocks in the UI.
 
     # Update ongoing → completed
     ongoing = Tournament.objects.filter(status="ongoing", tournament_end__lte=now)
@@ -343,3 +341,328 @@ def refresh_all_host_dashboards():
 
     logger.info(f"Triggered dashboard refresh for {count} active hosts")
     return {"hosts_refreshed": count}
+
+
+# ============================================================================
+# TEMP TEAM CONVERSION TASKS
+# ============================================================================
+
+
+@shared_task
+def notify_credential_release():
+    """
+    Runs every minute.
+    Finds tournaments whose credential_release_time just passed (within last 2 minutes)
+    and sends an in-app notification to all confirmed registered players.
+    Uses a cache key to ensure each tournament only notifies once.
+    """
+    now = timezone.now()
+    window_start = now - timezone.timedelta(minutes=2)
+
+    recently_released = Tournament.objects.filter(
+        credential_release_time__gte=window_start,
+        credential_release_time__lte=now,
+    )
+
+    notified_count = 0
+    for tournament in recently_released:
+        cache_key = f"cred_notif_sent:{tournament.id}"
+        if cache.get(cache_key):
+            continue  # Already sent for this tournament
+
+        registrations = TournamentRegistration.objects.filter(
+            tournament=tournament, status="confirmed"
+        ).select_related("player__user")
+
+        for reg in registrations:
+            if should_notify(reg.player.user, 'tournamentUpdates'):
+                Notification.objects.get_or_create(
+                    user=reg.player.user,
+                    type="credential_release",
+                    related_id=tournament.id,
+                    related_type="tournament",
+                    defaults={
+                        "title": "Room ID is ready!",
+                        "message": (
+                            f"Room ID & Password for '{tournament.title}' are now available. "
+                            f"Check your ID & Passwords tab."
+                        ),
+                        "is_read": False,
+                    },
+                )
+                notified_count += 1
+
+        # Mark as sent for 1 hour to prevent duplicate sends
+        cache.set(cache_key, True, 3600)
+
+    if notified_count:
+        logger.info(f"Sent credential release notifications to {notified_count} players")
+    return {"notified": notified_count}
+
+
+@shared_task
+def notify_slot_list_release():
+    """
+    Runs every minute.
+    Finds tournaments whose slot_list_release_time just passed (within last 2 minutes)
+    and sends an in-app notification to all confirmed registered players.
+    Uses a cache key to ensure each tournament only notifies once.
+    """
+    now = timezone.now()
+    window_start = now - timezone.timedelta(minutes=2)
+
+    recently_released = Tournament.objects.filter(
+        slot_list_release_time__gte=window_start,
+        slot_list_release_time__lte=now,
+    )
+
+    notified_count = 0
+    for tournament in recently_released:
+        cache_key = f"slot_notif_sent:{tournament.id}"
+        if cache.get(cache_key):
+            continue
+
+        registrations = TournamentRegistration.objects.filter(
+            tournament=tournament, status="confirmed"
+        ).select_related("player__user")
+
+        for reg in registrations:
+            Notification.objects.get_or_create(
+                user=reg.player.user,
+                type="slot_list_release",
+                related_id=tournament.id,
+                related_type="tournament",
+                defaults={
+                    "title": "Slot list is ready!",
+                    "message": (
+                        f"The slot list for '{tournament.title}' is now available. "
+                        f"Check your Slot List tab to see your slot number."
+                    ),
+                    "is_read": False,
+                },
+            )
+            notified_count += 1
+
+        cache.set(cache_key, True, 3600)
+
+    if notified_count:
+        logger.info(f"Sent slot list release notifications to {notified_count} players")
+    return {"notified": notified_count}
+
+
+@shared_task
+def notify_match_start():
+    """
+    Runs every minute.
+    Finds matches scheduled to start within the next 15 minutes and sends
+    a match_start notification to all teams in that match's group.
+    Uses a cache key to ensure each match only notifies once.
+    """
+    now = timezone.now()
+    window_end = now + timezone.timedelta(minutes=15)
+
+    upcoming_matches = Match.objects.filter(
+        scheduled_date__isnull=False,
+        status="pending",
+    ).select_related("group__tournament")
+
+    notified_count = 0
+    for match in upcoming_matches:
+        if not match.scheduled_date:
+            continue
+
+        # Combine scheduled_date and scheduled_time into a datetime
+        from datetime import datetime as dt, time as t
+        scheduled_time = match.scheduled_time or t(0, 0)
+        scheduled_dt = dt.combine(match.scheduled_date, scheduled_time)
+        if timezone.is_naive(scheduled_dt):
+            scheduled_dt = timezone.make_aware(scheduled_dt, timezone.get_current_timezone())
+
+        if not (now <= scheduled_dt <= window_end):
+            continue
+
+        cache_key = f"match_start_notif:{match.id}"
+        if cache.get(cache_key):
+            continue
+
+        tournament = match.group.tournament
+        try:
+            group_registrations = TournamentRegistration.objects.filter(
+                tournament_groups=match.group
+            ).select_related("team")
+            match_label = f"Match {match.match_number}" if match.match_number else "Your match"
+            notifications = []
+            for reg in group_registrations:
+                member_user_ids = TeamMember.objects.filter(
+                    team=reg.team, user__isnull=False
+                ).values_list("user_id", flat=True)
+                for user_id in member_user_ids:
+                    notifications.append(
+                        Notification(
+                            user_id=user_id,
+                            type="match_start",
+                            title="Match Starting Soon!",
+                            message=f"{match_label} for {tournament.title} starts in ~15 minutes. Get ready!",
+                            related_id=tournament.id,
+                            related_type="tournament",
+                        )
+                    )
+            if notifications:
+                Notification.objects.bulk_create(notifications)
+                notified_count += len(notifications)
+                logger.info(
+                    f"Match start notifications sent - Match: {match.id}, Tournament: {tournament.id}, Players: {len(notifications)}"
+                )
+        except Exception as e:
+            logger.error(f"Failed to send match start notifications for match {match.id}: {e}", exc_info=True)
+
+        # Mark this match as notified for 30 minutes to prevent duplicates
+        cache.set(cache_key, True, 1800)
+
+    if notified_count:
+        logger.info(f"Sent match start notifications to {notified_count} players")
+    return {"notified": notified_count}
+
+
+@shared_task(name="tournaments.tasks.check_temp_team_conversions")
+def check_temp_team_conversions():
+    """
+    Runs every minute alongside update_tournament_statuses.
+    When a tournament transitions to 'completed', find all temporary teams
+    linked to it and:
+      1. Set conversion_deadline = now + 48h
+      2. Send an in-app notification to the team captain
+    """
+    now = timezone.now()
+    # Find tournaments that just became completed within the last 2 minutes
+    # (window slightly wider than task interval to avoid gaps)
+    recently_completed = Tournament.objects.filter(
+        status="completed",
+        tournament_end__gte=now - timezone.timedelta(minutes=2),
+        tournament_end__lte=now,
+    )
+
+    notified_count = 0
+    for tournament in recently_completed:
+        temp_teams = Team.objects.filter(
+            linked_tournament=tournament,
+            is_temporary=True,
+            conversion_deadline__isnull=True,  # Not yet processed
+        )
+        for team in temp_teams:
+            deadline = now + timezone.timedelta(hours=48)
+            team.conversion_deadline = deadline
+            team.save(update_fields=["conversion_deadline"])
+
+            # Notify the captain
+            if should_notify(team.captain, 'tournamentUpdates'):
+                Notification.objects.get_or_create(
+                    user=team.captain,
+                    type="team_conversion_offer",
+                    related_id=team.id,
+                    related_type="team",
+                    defaults={
+                        "title": "Keep your team permanently?",
+                        "message": (
+                            f"Your team '{team.name}' was created for '{tournament.title}'. "
+                            f"Want to keep it permanently? You have 48 hours to decide."
+                        ),
+                        "is_read": False,
+                    },
+                )
+                notified_count += 1
+
+    if notified_count:
+        logger.info(f"Sent {notified_count} temp team conversion notifications")
+    return {"notified": notified_count}
+
+
+@shared_task(name="tournaments.tasks.send_temp_team_24h_reminders")
+def send_temp_team_24h_reminders():
+    """
+    Runs every hour.
+    Sends a reminder notification to captains whose temp team conversion
+    deadline is within the next 24 hours but they haven't acted yet.
+    Only sends once per team (tracked via a separate notification type).
+    """
+    now = timezone.now()
+    reminder_window_end = now + timezone.timedelta(hours=24)
+
+    teams_expiring_soon = Team.objects.filter(
+        is_temporary=True,
+        conversion_deadline__isnull=False,
+        conversion_deadline__gt=now,
+        conversion_deadline__lte=reminder_window_end,
+    )
+
+    reminded_count = 0
+    for team in teams_expiring_soon:
+        # Only send once — check if reminder already sent
+        already_sent = Notification.objects.filter(
+            user=team.captain,
+            type="team_conversion_reminder",
+            related_id=team.id,
+        ).exists()
+        if already_sent:
+            continue
+
+        hours_left = int((team.conversion_deadline - now).total_seconds() / 3600)
+        if should_notify(team.captain, 'tournamentUpdates'):
+            Notification.objects.create(
+                user=team.captain,
+                type="team_conversion_reminder",
+                related_id=team.id,
+                related_type="team",
+                title="Last chance: Keep your team?",
+                message=(
+                    f"Your team '{team.name}' will be deleted in ~{hours_left} hour(s). "
+                    f"Go to Team tab to keep it permanently or it will be removed."
+                ),
+                is_read=False,
+            )
+            reminded_count += 1
+
+    if reminded_count:
+        logger.info(f"Sent {reminded_count} 24h temp team reminder notifications")
+    return {"reminded": reminded_count}
+
+
+@shared_task(name="tournaments.tasks.cleanup_expired_temp_teams")
+def cleanup_expired_temp_teams():
+    """
+    Runs every hour.
+    Deletes temporary teams whose 48h conversion window has passed
+    without the captain accepting. Notifies captain before deleting.
+    """
+    now = timezone.now()
+    expired = Team.objects.filter(
+        is_temporary=True,
+        conversion_deadline__isnull=False,
+        conversion_deadline__lt=now,
+    )
+
+    count = 0
+    for team in expired:
+        # Notify the captain that the team was deleted
+        try:
+            if should_notify(team.captain, 'tournamentUpdates'):
+                Notification.objects.create(
+                    user=team.captain,
+                    type="team_deleted",
+                    related_id=team.id,
+                    related_type="team",
+                    title="Team deleted",
+                    message=(
+                        f"Your temporary team '{team.name}' has been deleted "
+                        f"because the 48-hour conversion window expired."
+                    ),
+                    is_read=False,
+                )
+        except Exception as e:
+            logger.warning(f"Failed to send deletion notification for team {team.id}: {e}")
+        count += 1
+
+    expired.delete()
+    if count:
+        logger.info(f"Deleted {count} expired temporary teams")
+    return {"deleted": count}

@@ -10,9 +10,10 @@ from django.utils import timezone
 
 from celery import shared_task
 
-from accounts.models import Team, TeamJoinRequest
+from accounts.models import Notification, Team, TeamJoinRequest
 from scrimverse.email_utils import (
     send_host_approved_email,
+    send_host_rejected_email,
     send_player_tournament_reminder_email,
     send_registration_limit_reached_email,
     send_team_invite_email,
@@ -194,6 +195,33 @@ def send_tournament_reminders_1h():
             logger.error(f"Error sending 1h reminders for tournament {tournament.id}: {e}")
 
     logger.info(f"Sent {reminders_sent} 1h reminder emails")
+
+    # Notify each host that their tournament starts in ~1h (send once per tournament)
+    host_notif_count = 0
+    for tournament in tournaments:
+        cache_key = f"host_start_notif_1h:{tournament.id}"
+        try:
+            from django.core.cache import cache as django_cache
+            if not django_cache.get(cache_key) and hasattr(tournament, 'host') and tournament.host:
+                Notification.objects.get_or_create(
+                    user=tournament.host.user,
+                    type='tournament_start_reminder',
+                    related_id=tournament.id,
+                    related_type='tournament',
+                    defaults={
+                        'title': 'Tournament Starting in 1 Hour',
+                        'message': f'Your tournament "{tournament.title}" starts at {tournament.tournament_start.strftime("%I:%M %p")}. Make sure everything is set up.',
+                        'is_read': False,
+                    },
+                )
+                django_cache.set(cache_key, True, 7200)
+                host_notif_count += 1
+        except Exception as e:
+            logger.warning(f"Failed to send host start reminder for tournament {tournament.id}: {e}")
+
+    if host_notif_count:
+        logger.info(f"Sent {host_notif_count} host tournament start notifications")
+
     return {"reminders_sent": reminders_sent}
 
 
@@ -263,6 +291,14 @@ def send_host_approved_email_task(
 ):
     """Async task to send host account approval email"""
     return send_host_approved_email(user_email, user_name, host_name, approved_at, host_dashboard_url)
+
+
+@shared_task(name="send_host_rejected_email_task")
+def send_host_rejected_email_task(
+    user_email: str, user_name: str, host_name: str, rejection_reason: str, login_url: str
+):
+    """Async task to send host account rejection email with reason"""
+    return send_host_rejected_email(user_email, user_name, host_name, rejection_reason, login_url)
 
 
 @shared_task(name="send_tournament_created_email_task")

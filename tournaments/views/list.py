@@ -1,7 +1,10 @@
 import logging
 
+from datetime import timedelta
+
 from django.core.cache import cache
-from django.db.models import Q, Sum
+from django.db.models import Count, Q, Sum
+from django.db.models.functions import TruncDate, TruncMonth
 from django.utils import timezone
 
 from rest_framework import generics, permissions
@@ -9,6 +12,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import HostProfile, PlayerProfile
+from payments.models import Payment
 from tournaments.models import HostRating, Tournament, TournamentRegistration
 from tournaments.serializers import (
     HostRatingSerializer,
@@ -119,7 +123,7 @@ class TournamentDetailView(generics.RetrieveAPIView):
                 player_profile = PlayerProfile.objects.get(user=request.user)
                 tournament_id = kwargs.get("pk")
 
-                # Check if player has a registration
+                # Check if player has a direct registration (captain)
                 registration = TournamentRegistration.objects.filter(
                     tournament_id=tournament_id, player=player_profile
                 ).first()
@@ -127,11 +131,36 @@ class TournamentDetailView(generics.RetrieveAPIView):
                 if registration:
                     response.data["user_registration_status"] = registration.status
                 else:
-                    response.data["user_registration_status"] = None
+                    # Check if user is a team member of any team registered in this tournament
+                    team_reg = TournamentRegistration.objects.filter(
+                        tournament_id=tournament_id,
+                        team__members__user=request.user
+                    ).exclude(status='rejected').first()
+
+                    if team_reg:
+                        response.data["user_registration_status"] = team_reg.status
+                    else:
+                        response.data["user_registration_status"] = None
             except PlayerProfile.DoesNotExist:
                 response.data["user_registration_status"] = None
         else:
             response.data["user_registration_status"] = None
+
+        # Resolve 1st place winner name for completed tournaments
+        tournament = self.get_object()
+        if tournament.status == "completed" and tournament.winners:
+            try:
+                final_round = str(tournament.get_total_rounds())
+                winner_reg_id = tournament.winners.get(final_round)
+                if winner_reg_id:
+                    winner_reg = TournamentRegistration.objects.get(id=winner_reg_id)
+                    response.data["winner_name"] = winner_reg.team_name or winner_reg.player.user.username
+                else:
+                    response.data["winner_name"] = None
+            except Exception:
+                response.data["winner_name"] = None
+        else:
+            response.data["winner_name"] = None
 
         return response
 
@@ -345,5 +374,331 @@ class HostDashboardStatsView(APIView):
                 "upcoming_tournaments": upcoming_serializer.data,
                 "past_tournaments": past_serializer.data,
                 "recent_activity": recent_activity,
+            }
+        )
+
+
+class HostAnalyticsView(APIView):
+    """
+    Detailed analytics for the authenticated host.
+    GET /api/tournaments/stats/host/analytics/
+    Returns KPIs, trend data, engagement breakdown, game distribution,
+    and per-tournament analytics.
+    """
+
+    permission_classes = [IsHostUser]
+
+    def get(self, request):
+        host_profile = HostProfile.objects.get(user=request.user)
+        now = timezone.now()
+        thirty_days_ago = now - timedelta(days=30)
+        six_months_ago = now - timedelta(days=180)
+
+        # ------------------------------------------------------------------
+        # KPIs
+        # ------------------------------------------------------------------
+
+        # Total revenue: completed entry_fee payments for host's tournaments
+        total_revenue = float(
+            Payment.objects.filter(
+                tournament__host=host_profile,
+                payment_type="entry_fee",
+                status="completed",
+            ).aggregate(total=Sum("amount"))["total"]
+            or 0
+        )
+
+        # Total confirmed registrations
+        total_registrations = TournamentRegistration.objects.filter(
+            tournament__host=host_profile, status="confirmed"
+        ).count()
+
+        # Average fill rate across host's tournaments (only those with capacity > 0)
+        host_tournaments = Tournament.objects.filter(host=host_profile)
+        fill_rates = []
+        for t in host_tournaments:
+            capacity = (t.max_participants or 0) if (t.max_participants or 0) > 0 else (t.max_teams or 0)
+            if capacity > 0:
+                reg_count = TournamentRegistration.objects.filter(tournament=t, status="confirmed").count()
+                fill_rates.append(reg_count / capacity * 100)
+        avg_fill_rate = round(sum(fill_rates) / len(fill_rates), 1) if fill_rates else 0.0
+
+        # Returning players percentage
+        # A player is "returning" if they appear in ≥ 2 confirmed registrations for this host
+        player_reg_counts: dict = {}
+        all_regs = TournamentRegistration.objects.filter(
+            tournament__host=host_profile, status="confirmed"
+        ).values_list("player_id", flat=True)
+        for pid in all_regs:
+            if pid is not None:
+                player_reg_counts[pid] = player_reg_counts.get(pid, 0) + 1
+        total_unique_players = len(player_reg_counts)
+        returning_count = sum(1 for cnt in player_reg_counts.values() if cnt >= 2)
+        returning_players_pct = (
+            round(returning_count / total_unique_players * 100, 1) if total_unique_players > 0 else 0.0
+        )
+
+        tournaments_hosted = host_tournaments.count()
+
+        kpis = {
+            "total_revenue": total_revenue,
+            "total_registrations": total_registrations,
+            "avg_fill_rate": avg_fill_rate,
+            "returning_players_pct": returning_players_pct,
+            "avg_dropoff": 0.0,
+            "tournaments_hosted": tournaments_hosted,
+        }
+
+        # ------------------------------------------------------------------
+        # Global registration trend (last 6 months — frontend does range slicing)
+        # ------------------------------------------------------------------
+        raw_reg_trend = (
+            TournamentRegistration.objects.filter(
+                tournament__host=host_profile,
+                status="confirmed",
+                registered_at__gte=six_months_ago,
+            )
+            .annotate(day=TruncDate("registered_at"))
+            .values("day")
+            .annotate(count=Count("id"))
+            .order_by("day")
+        )
+        cumulative = 0
+        registration_trend = []
+        for r in raw_reg_trend:
+            cumulative += r["count"]
+            registration_trend.append(
+                {
+                    "date": r["day"].strftime("%Y-%m-%d"),
+                    "registrations": r["count"],
+                    "cumulative": cumulative,
+                }
+            )
+
+        # ------------------------------------------------------------------
+        # Global revenue trend (last 6 months)
+        # ------------------------------------------------------------------
+        raw_revenue = (
+            Payment.objects.filter(
+                tournament__host=host_profile,
+                payment_type="entry_fee",
+                status="completed",
+                completed_at__gte=six_months_ago,
+            )
+            .annotate(month=TruncMonth("completed_at"))
+            .values("month")
+            .annotate(total=Sum("amount"))
+            .order_by("month")
+        )
+        revenue_trend = [
+            {"month": p["month"].strftime("%b %Y"), "revenue": float(p["total"])} for p in raw_revenue
+        ]
+
+        # ------------------------------------------------------------------
+        # Engagement (last 6 months) — returning vs new per month
+        # A player is "returning" in a given month if they also registered in
+        # ANY OTHER tournament by this host (outside of this month's tournaments).
+        # This is tournament-based rather than time-based, so it works correctly
+        # even when all tournaments were created within the same calendar month.
+        # ------------------------------------------------------------------
+        engagement = []
+        for i in range(5, -1, -1):
+            # Compute month_start as the 1st of the month (i months ago)
+            month_start = (now - timedelta(days=i * 30)).replace(
+                day=1, hour=0, minute=0, second=0, microsecond=0
+            )
+            month_end = (month_start + timedelta(days=32)).replace(
+                day=1, hour=0, minute=0, second=0, microsecond=0
+            )
+            # Tournaments that had registrations this month
+            month_tournament_ids = list(
+                TournamentRegistration.objects.filter(
+                    tournament__host=host_profile,
+                    status="confirmed",
+                    registered_at__gte=month_start,
+                    registered_at__lt=month_end,
+                ).values_list("tournament_id", flat=True).distinct()
+            )
+            month_player_ids = list(
+                TournamentRegistration.objects.filter(
+                    tournament__host=host_profile,
+                    status="confirmed",
+                    registered_at__gte=month_start,
+                    registered_at__lt=month_end,
+                ).values_list("player_id", flat=True)
+            )
+            # Players who also registered in any OTHER tournament of this host
+            # (i.e. a tournament not in this month's batch)
+            other_player_ids = set(
+                TournamentRegistration.objects.filter(
+                    tournament__host=host_profile,
+                    status="confirmed",
+                ).exclude(
+                    tournament_id__in=month_tournament_ids,
+                ).values_list("player_id", flat=True)
+            )
+            returning_m = 0
+            new_players_m = 0
+            for player_id in month_player_ids:
+                if player_id is None:
+                    new_players_m += 1
+                    continue
+                if player_id in other_player_ids:
+                    returning_m += 1
+                else:
+                    new_players_m += 1
+            engagement.append(
+                {
+                    "month": month_start.strftime("%b %Y"),
+                    "returning": returning_m,
+                    "new": new_players_m,
+                }
+            )
+
+        # ------------------------------------------------------------------
+        # Game distribution — by registration count per game
+        # ------------------------------------------------------------------
+        reg_by_game = (
+            TournamentRegistration.objects.filter(
+                tournament__host=host_profile, status="confirmed"
+            )
+            .values("tournament__game_name")
+            .annotate(count=Count("id"))
+            .order_by("-count")
+        )
+        total_regs_for_dist = sum(g["count"] for g in reg_by_game)
+        game_distribution = []
+        for g in reg_by_game:
+            game_name = g["tournament__game_name"]
+            if game_name:
+                pct = round(g["count"] / total_regs_for_dist * 100, 1) if total_regs_for_dist > 0 else 0.0
+                game_distribution.append({"name": game_name, "value": pct})
+
+        # ------------------------------------------------------------------
+        # Per-tournament analytics
+        # ------------------------------------------------------------------
+        # Pre-build set of all player IDs registered to host's tournaments
+        # (used for cross-tournament returning player checks)
+        all_host_player_ids = set(
+            TournamentRegistration.objects.filter(
+                tournament__host=host_profile, status="confirmed"
+            ).values_list("player_id", flat=True)
+        )
+
+        tournaments_data = []
+        for t in host_tournaments.order_by("-created_at"):
+            t_capacity = (t.max_participants or 0) if (t.max_participants or 0) > 0 else (t.max_teams or 0)
+            t_regs = TournamentRegistration.objects.filter(tournament=t, status="confirmed").count()
+            t_fill_rate = round(t_regs / t_capacity * 100, 1) if t_capacity > 0 else 0.0
+            t_revenue = float(
+                Payment.objects.filter(
+                    tournament=t, payment_type="entry_fee", status="completed"
+                ).aggregate(total=Sum("amount"))["total"]
+                or 0
+            )
+
+            # Per-tournament registration trend (last 6 months)
+            raw_t_reg_trend = (
+                TournamentRegistration.objects.filter(
+                    tournament=t,
+                    status="confirmed",
+                    registered_at__gte=six_months_ago,
+                )
+                .annotate(day=TruncDate("registered_at"))
+                .values("day")
+                .annotate(count=Count("id"))
+                .order_by("day")
+            )
+            t_cum = 0
+            t_reg_trend = []
+            for r in raw_t_reg_trend:
+                t_cum += r["count"]
+                t_reg_trend.append(
+                    {
+                        "date": r["day"].strftime("%Y-%m-%d"),
+                        "registrations": r["count"],
+                        "cumulative": t_cum,
+                    }
+                )
+
+            # Per-tournament revenue trend (last 6 months, grouped by month)
+            raw_t_rev = (
+                Payment.objects.filter(
+                    tournament=t,
+                    payment_type="entry_fee",
+                    status="completed",
+                    completed_at__gte=six_months_ago,
+                )
+                .annotate(month=TruncMonth("completed_at"))
+                .values("month")
+                .annotate(total=Sum("amount"))
+                .order_by("month")
+            )
+            t_rev_trend = [
+                {"month": p["month"].strftime("%b %Y"), "revenue": float(p["total"])} for p in raw_t_rev
+            ]
+
+            # Per-tournament engagement: check how many players also played in other
+            # tournaments by this host (cross-tournament returning)
+            t_player_ids = list(
+                TournamentRegistration.objects.filter(tournament=t, status="confirmed").values_list(
+                    "player_id", flat=True
+                )
+            )
+            # Players registered to other host tournaments (excluding this one)
+            other_player_ids = set(
+                TournamentRegistration.objects.filter(
+                    tournament__host=host_profile, status="confirmed"
+                )
+                .exclude(tournament=t)
+                .values_list("player_id", flat=True)
+            )
+            t_returning = sum(1 for p in t_player_ids if p is not None and p in other_player_ids)
+            t_new = len(t_player_ids) - t_returning
+
+            # Per-tournament registered teams (for team list in analytics detail view)
+            t_team_regs = (
+                TournamentRegistration.objects.filter(tournament=t, status="confirmed")
+                .select_related("team", "player__user")
+                .order_by("registered_at")
+            )
+            t_teams = []
+            for reg in t_team_regs:
+                team_obj = reg.team
+                member_count = team_obj.members.count() if team_obj else 1
+                t_teams.append(
+                    {
+                        "id": team_obj.id if team_obj else None,
+                        "name": reg.team_name or (team_obj.name if team_obj else "Unknown"),
+                        "players": member_count,
+                        "registered_at": reg.registered_at.strftime("%b %d") if reg.registered_at else "",
+                    }
+                )
+
+            tournaments_data.append(
+                {
+                    "id": t.id,
+                    "name": t.title,
+                    "game": t.game_name,
+                    "registrations": t_regs,
+                    "capacity": t_capacity,
+                    "fill_rate": t_fill_rate,
+                    "revenue": t_revenue,
+                    "status": t.status,
+                    "registration_trend": t_reg_trend,
+                    "revenue_trend": t_rev_trend,
+                    "engagement": {"returning": t_returning, "new": t_new},
+                    "teams": t_teams,
+                }
+            )
+
+        return Response(
+            {
+                "kpis": kpis,
+                "registration_trend": registration_trend,
+                "revenue_trend": revenue_trend,
+                "engagement": engagement,
+                "game_distribution": game_distribution,
+                "tournaments": tournaments_data,
             }
         )

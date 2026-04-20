@@ -1130,12 +1130,12 @@ class PlayerPublicRegistrationsView(generics.ListAPIView):
         player_id = self.kwargs["player_id"]
 
         try:
-            player = PlayerProfile.objects.get(id=player_id)
+            player = PlayerProfile.objects.get(user_id=player_id)
             user = player.user
             team_ids = TeamMember.objects.filter(user=user).values_list("team_id", flat=True)
 
             queryset = TournamentRegistration.objects.filter(
-                Q(player_id=player_id) | Q(team_id__in=team_ids)
+                Q(player_id=player.id) | Q(team_id__in=team_ids)
             ).distinct()
         except PlayerProfile.DoesNotExist:
             return TournamentRegistration.objects.none()
@@ -1952,8 +1952,8 @@ class EndTournamentView(generics.GenericAPIView):
 
         logger.info(f"Tournament completed email sent to host: {tournament.host.user.email}")
 
-        # Trigger leaderboard update asynchronously
-        update_leaderboard.delay()
+        # Trigger leaderboard update synchronously so stats are immediately available
+        update_leaderboard()
 
         message = "Tournament ended successfully"
         if not all_rounds_completed:

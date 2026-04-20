@@ -14,11 +14,11 @@ from rest_framework import generics, parsers, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import HostProfile
+from accounts.models import HostProfile, Notification, TeamMember
 from payments.models import Payment, PlanPricing
 from payments.services import phonepe_service
 from tournaments.models import Match, Tournament, TournamentRegistration
-from tournaments.serializers import TournamentSerializer
+from tournaments.serializers import TournamentSerializer, TournamentRegistrationSerializer
 from tournaments.tasks import send_tournament_created_email_task
 from tournaments.views.permissions import IsHostUser
 
@@ -54,6 +54,22 @@ class TournamentCreateView(generics.CreateAPIView):
                 elif hasattr(value, "size") and value.size == 0:
                     data.pop(file_field)
 
+        # Remap frontend field `match_count` → model field `max_matches` if present
+        if "match_count" in data and "max_matches" not in data:
+            data["max_matches"] = data["match_count"]
+
+        # Parse `match_maps` from JSON string if sent as FormData string
+        # Pull it out before serializer sees it, apply after save
+        match_maps_parsed = None
+        if "match_maps" in data and isinstance(data["match_maps"], str):
+            try:
+                match_maps_parsed = json.loads(data["match_maps"])
+                data._mutable = True
+                data.pop("match_maps")
+                data._mutable = False
+            except (json.JSONDecodeError, ValueError):
+                pass
+
         # Validate the data using serializer
         serializer = self.get_serializer(data=data)
         if not serializer.is_valid():
@@ -80,6 +96,10 @@ class TournamentCreateView(generics.CreateAPIView):
             tournament = serializer.save(
                 host=request.user.host_profile, plan_payment_status=True, plan_payment_id="FREE_PLAN"
             )
+
+            if match_maps_parsed is not None:
+                tournament.match_maps = match_maps_parsed
+                tournament.save(update_fields=["match_maps"])
 
             logger.info(f"Tournament created (free plan): {tournament.id} - {tournament.title}")
 
@@ -440,8 +460,11 @@ class UpdateTournamentFieldsView(generics.UpdateAPIView):
     def update(self, request, *args, **kwargs):
         instance = self.get_object()
 
-        # Only allow editing upcoming tournaments — once started, configuration is locked
-        if instance.status != "upcoming":
+        # Only allow editing upcoming tournaments — once started, configuration is locked.
+        # Exception: live_link can always be updated (host may add stream link after tournament starts).
+        request_fields = set(request.data.keys())
+        live_link_only = request_fields <= {"live_link"}
+        if instance.status != "upcoming" and not live_link_only:
             return Response(
                 {"detail": "Tournament configuration can only be edited while the tournament is upcoming."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -469,6 +492,7 @@ class UpdateTournamentFieldsView(generics.UpdateAPIView):
             "banner_image",
             "tournament_file",
             "plan_type",
+            "live_link",
         ]
         data = request.data.copy()
 
@@ -493,6 +517,9 @@ class UpdateTournamentFieldsView(generics.UpdateAPIView):
                 except (json.JSONDecodeError, TypeError):
                     pass  # Let serializer validation handle invalid JSON
 
+        # Handle live_link: URLField rejects empty strings, so save via queryset.update after serializer
+        live_link = filtered_data.pop('live_link', None)
+
         logger.info(f"Updating tournament {instance.id} with fields: {list(filtered_data.keys())}")
         if "rounds" in filtered_data:
             logger.info(f"New rounds data: {filtered_data['rounds']}")
@@ -505,8 +532,15 @@ class UpdateTournamentFieldsView(generics.UpdateAPIView):
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
 
+        # Save live_link via direct SQL update so serializer.save() can't overwrite it
+        if live_link is not None:
+            Tournament.objects.filter(pk=instance.pk).update(
+                live_link=live_link if live_link else None
+            )
+
         cache.delete("tournaments:list:all")
-        return Response(serializer.data)
+        instance.refresh_from_db()
+        return Response(self.get_serializer(instance).data)
 
 
 class UpdateTeamStatusView(generics.GenericAPIView):
@@ -620,12 +654,21 @@ class StartTournamentView(generics.GenericAPIView):
 
         # Update tournament
         tournament.status = "ongoing"
-        tournament.current_round = 1
 
-        # Set Round 1 status to ongoing
+        # If Round 1 was pre-configured, keep it as pre_configured and leave current_round=0
+        # so the host must explicitly click "Start Round 1" to activate it and notify players.
+        # Otherwise, set round 1 as ongoing immediately.
         if not tournament.round_status:
             tournament.round_status = {}
-        tournament.round_status["1"] = "ongoing"
+        round1_status = tournament.round_status.get("1")
+        is_preconfigured = (
+            isinstance(round1_status, dict) and round1_status.get("status") == "pre_configured"
+        )
+        if is_preconfigured:
+            tournament.current_round = 0
+        else:
+            tournament.current_round = 1
+            tournament.round_status["1"] = "ongoing"
 
         tournament.save(update_fields=["status", "current_round", "round_status"])
 
@@ -656,7 +699,11 @@ class EndTournamentView(generics.GenericAPIView):
         # Check if all rounds are completed (warning only, not blocking)
         all_rounds_completed = True
         if tournament.round_status and len(tournament.round_status) > 0:
-            all_rounds_completed = all(s == "completed" for s in tournament.round_status.values())
+            def _is_completed(val):
+                if isinstance(val, dict):
+                    return val.get("status") == "completed"
+                return val == "completed"
+            all_rounds_completed = all(_is_completed(s) for s in tournament.round_status.values())
 
         # End tournament regardless of round status (host decision)
         tournament.status = "completed"
@@ -707,6 +754,63 @@ class EndTournamentView(generics.GenericAPIView):
         )
 
         logger.info(f"Tournament completed email sent to host: {tournament.host.user.email}")
+
+        # Notify all confirmed registered players — "Tournament Ended" then "Winner Declared"
+        try:
+            registrations = TournamentRegistration.objects.filter(
+                tournament=tournament, status="confirmed"
+            ).select_related("team", "player__user")
+
+            # Collect unique user IDs across all registered teams/players
+            notified_user_ids = set()
+            for reg in registrations:
+                if reg.team_id:
+                    # Team-based registration — notify all team members
+                    member_user_ids = TeamMember.objects.filter(
+                        team_id=reg.team_id, user__isnull=False
+                    ).values_list("user_id", flat=True)
+                    notified_user_ids.update(member_user_ids)
+                elif reg.player_id:
+                    # Solo registration — notify the player directly
+                    notified_user_ids.add(reg.player.user_id)
+
+            ended_notifications = []
+            winner_notifications = []
+            for user_id in notified_user_ids:
+                ended_notifications.append(
+                    Notification(
+                        user_id=user_id,
+                        type="tournament_result",
+                        title="Tournament Ended",
+                        message=f"{tournament.title} has ended.",
+                        related_id=tournament.id,
+                        related_type="tournament",
+                    )
+                )
+                if winner_name != "TBD":
+                    winner_notifications.append(
+                        Notification(
+                            user_id=user_id,
+                            type="tournament_result",
+                            title="Winner Declared",
+                            message=f"{winner_name} has won {tournament.title}!",
+                            related_id=tournament.id,
+                            related_type="tournament",
+                        )
+                    )
+
+            if ended_notifications:
+                Notification.objects.bulk_create(ended_notifications)
+                logger.info(
+                    f"Tournament end notifications sent - Tournament: {tournament.id}, Players notified: {len(ended_notifications)}"
+                )
+            if winner_notifications:
+                Notification.objects.bulk_create(winner_notifications)
+                logger.info(
+                    f"Winner notifications sent - Tournament: {tournament.id}, Winner: {winner_name}, Players notified: {len(winner_notifications)}"
+                )
+        except Exception as e:
+            logger.error(f"Failed to send tournament end notifications: {e}", exc_info=True)
 
         # Trigger leaderboard update asynchronously
         update_leaderboard.delay()

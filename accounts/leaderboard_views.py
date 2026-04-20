@@ -66,6 +66,9 @@ class LeaderboardView(generics.GenericAPIView):
                     data["total_points"] = stats.scrim_position_points + stats.scrim_kill_points
                     data["total_position_points"] = stats.scrim_position_points
                     data["total_kill_points"] = stats.scrim_kill_points
+                    data["matches_played"] = stats.matches_played
+                    data["tournament_matches_played"] = stats.tournament_matches_played
+                    data["scrim_matches_played"] = stats.scrim_matches_played
                     leaderboard_data.append(data)
                 data = {
                     "leaderboard": leaderboard_data,
@@ -88,6 +91,7 @@ class LeaderboardView(generics.GenericAPIView):
                     data["total_points"] = stats.scrim_position_points + stats.scrim_kill_points
                     data["total_position_points"] = stats.scrim_position_points
                     data["total_kill_points"] = stats.scrim_kill_points
+                    data["matches_played"] = stats.matches_played
                     leaderboard_data.append(data)
 
                 data = {
@@ -111,6 +115,9 @@ class LeaderboardView(generics.GenericAPIView):
                     data["total_points"] = stats.tournament_position_points + stats.tournament_kill_points
                     data["total_position_points"] = stats.tournament_position_points
                     data["total_kill_points"] = stats.tournament_kill_points
+                    data["matches_played"] = stats.matches_played
+                    data["tournament_matches_played"] = stats.tournament_matches_played
+                    data["scrim_matches_played"] = stats.scrim_matches_played
                     leaderboard_data.append(data)
                 data = {
                     "leaderboard": leaderboard_data,
@@ -142,6 +149,7 @@ class LeaderboardView(generics.GenericAPIView):
                     data["total_points"] = stats.tournament_position_points + stats.tournament_kill_points
                     data["total_position_points"] = stats.tournament_position_points
                     data["total_kill_points"] = stats.tournament_kill_points
+                    data["matches_played"] = stats.matches_played
                     leaderboard_data.append(data)
 
                 if game_filter in WINS_ONLY_GAMES:

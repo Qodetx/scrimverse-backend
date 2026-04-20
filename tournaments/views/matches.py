@@ -10,7 +10,7 @@ from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from accounts.models import HostProfile, PlayerProfile, TeamMember, User
+from accounts.models import HostProfile, Notification, PlayerProfile, TeamMember, User
 from tournaments.models import Group, Match, MatchScore, Tournament, TournamentRegistration
 from tournaments.services import TournamentGroupService
 from tournaments.views.permissions import IsHostUser
@@ -90,6 +90,33 @@ class StartMatchView(generics.GenericAPIView):
             group.status = "ongoing"
             group.save(update_fields=["status"])
 
+        # Send credential notification to players in this group only
+        group_registrations = TournamentRegistration.objects.filter(
+            tournament_groups=group
+        ).select_related("team")
+        cred_notifications = []
+        for reg in group_registrations:
+            member_user_ids = TeamMember.objects.filter(
+                team=reg.team, user__isnull=False
+            ).values_list("user_id", flat=True)
+            for user_id in member_user_ids:
+                cred_notifications.append(
+                    Notification(
+                        user_id=user_id,
+                        type="credential_release",
+                        related_id=tournament.id,
+                        related_type="tournament",
+                        title="Room ID is ready!",
+                        message=(
+                            f"Room ID & Password for '{tournament.title}' Match {match.match_number} "
+                            f"({group.group_name}) are now available. Check your ID & Passwords tab."
+                        ),
+                        is_read=False,
+                    )
+                )
+        if cred_notifications:
+            Notification.objects.bulk_create(cred_notifications, ignore_conflicts=True)
+
         # Build response
         response_match = {
             "id": match.id,
@@ -113,6 +140,79 @@ class StartMatchView(generics.GenericAPIView):
                 "match": response_match,
             }
         )
+
+
+class UpdateMatchCredentialsView(generics.GenericAPIView):
+    """
+    Update match credentials (Room ID / Password) without changing match status.
+    PATCH /api/tournaments/<tournament_id>/matches/<match_id>/credentials/
+    Body: { "match_id": "ROOM123", "match_password": "pass456" }
+    """
+
+    permission_classes = [IsHostUser]
+
+    def patch(self, request, tournament_id, match_id):
+        host_profile = HostProfile.objects.get(user=request.user)
+        tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
+
+        try:
+            match = Match.objects.get(id=match_id, group__tournament=tournament)
+        except Match.DoesNotExist:
+            return Response({"error": "Match not found"}, status=404)
+
+        if match.status == "completed":
+            return Response({"error": "Cannot update credentials for a completed match"}, status=400)
+
+        match_room_id = request.data.get("match_id", match.match_id)
+        match_password = request.data.get("match_password", match.match_password)
+
+        if not match_room_id:
+            return Response({"error": "match_id is required"}, status=400)
+
+        is_first_release = not match.match_id  # credentials being set for the first time
+        match.match_id = match_room_id
+        match.match_password = match_password
+        match.save(update_fields=["match_id", "match_password"])
+
+        # Send credential notification only to players in this match's group
+        if is_first_release:
+            group = match.group
+            group_registrations = TournamentRegistration.objects.filter(
+                tournament_groups=group
+            ).select_related("team")
+            cred_notifications = []
+            for reg in group_registrations:
+                member_user_ids = TeamMember.objects.filter(
+                    team=reg.team, user__isnull=False
+                ).values_list("user_id", flat=True)
+                for user_id in member_user_ids:
+                    cred_notifications.append(
+                        Notification(
+                            user_id=user_id,
+                            type="credential_release",
+                            related_id=tournament.id,
+                            related_type="tournament",
+                            title="Room ID is ready!",
+                            message=(
+                                f"Room ID & Password for '{tournament.title}' Match {match.match_number} "
+                                f"({group.group_name}) are now available. Check your ID & Passwords tab."
+                            ),
+                            is_read=False,
+                        )
+                    )
+            if cred_notifications:
+                Notification.objects.bulk_create(cred_notifications, ignore_conflicts=True)
+
+        return Response({
+            "message": "Match credentials updated",
+            "match": {
+                "id": match.id,
+                "match_number": match.match_number,
+                "match_id": match.match_id,
+                "match_password": match.match_password,
+                "status": match.status,
+            }
+        })
 
 
 class EndMatchView(generics.GenericAPIView):
@@ -246,6 +346,33 @@ class SubmitMatchScoresView(generics.GenericAPIView):
                 logger.debug(f"Group winner determined - Group: {group.group_name}, Winner: {group.winner.team_name if group.winner else 'None'}")
 
             group.save(update_fields=["status"])
+
+        # Notify all teams in this group that match scores have been entered
+        try:
+            group_registrations = TournamentRegistration.objects.filter(
+                tournament_groups=group
+            ).select_related("team")
+            notifications = []
+            match_label = f"Match {match.match_number}" if match.match_number else "A match"
+            for reg in group_registrations:
+                member_user_ids = TeamMember.objects.filter(
+                    team=reg.team, user__isnull=False
+                ).values_list("user_id", flat=True)
+                for user_id in member_user_ids:
+                    notifications.append(
+                        Notification(
+                            user_id=user_id,
+                            type="points_entered",
+                            title="Points Updated",
+                            message=f"{match_label} scores have been submitted for {tournament.title}. Check your Points Table!",
+                            related_id=tournament.id,
+                            related_type="tournament",
+                        )
+                    )
+            if notifications:
+                Notification.objects.bulk_create(notifications)
+        except Exception as e:
+            logger.error(f"Failed to send points_entered notifications: {e}", exc_info=True)
 
         return Response(
             {

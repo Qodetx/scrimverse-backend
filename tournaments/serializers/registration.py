@@ -159,7 +159,12 @@ class TournamentRegistrationSerializer(serializers.ModelSerializer):
         # for organizational purposes, or just rely on the strings in registration.
         # Flow says: "if not : it should exist only for that tournament... should be treated as temporary"
         if not team_instance:
-            team_instance = Team.objects.create(name=team_name, captain=registering_player.user, is_temporary=True)
+            team_instance = Team.objects.create(
+                name=team_name,
+                captain=registering_player.user,
+                is_temporary=True,
+                linked_tournament=tournament,
+            )
 
         # Prepare team members data for registration record (snapshot)
         team_members_data = []
@@ -177,8 +182,20 @@ class TournamentRegistrationSerializer(serializers.ModelSerializer):
                     }
                 )
         else:
-            # Otherwise, use player_usernames
+            # Always include the registering captain first
+            cap_user = registering_player.user
+            cap_pp_id = registering_player.id
+            team_members_data.append(
+                {
+                    "username": cap_user.username,
+                    "is_registered": True,
+                    "player_id": cap_pp_id,
+                }
+            )
+            # Then add any explicitly provided player_usernames (excluding captain to avoid duplicate)
             for username in player_usernames:
+                if username == cap_user.username:
+                    continue
                 user_obj = User.objects.filter(username=username, user_type="player").first()
                 team_members_data.append(
                     {
@@ -240,11 +257,28 @@ class TournamentRegistrationInitSerializer(serializers.Serializer):
     }
     """
     team_name = serializers.CharField(max_length=255, required=True)
+    invite_mode = serializers.ChoiceField(
+        choices=['email', 'username', 'phone'],
+        required=False,
+        default='email',
+    )
     teammate_emails = serializers.ListField(
         child=serializers.EmailField(),
         required=False,
         allow_empty=True,
-        help_text="List of teammate email addresses. For 5v5 games (Valorant/COD): 4 emails required. For Squad BGMI: 3 emails required."
+        help_text="List of teammate email addresses."
+    )
+    teammate_usernames = serializers.ListField(
+        child=serializers.CharField(max_length=150),
+        required=False,
+        allow_empty=True,
+        help_text="List of teammate usernames."
+    )
+    teammate_phones = serializers.ListField(
+        child=serializers.CharField(max_length=20),
+        required=False,
+        allow_empty=True,
+        help_text="List of teammate phone numbers."
     )
 
     def validate_team_name(self, value):
@@ -255,34 +289,130 @@ class TournamentRegistrationInitSerializer(serializers.Serializer):
 
     def validate_teammate_emails(self, value):
         """Validate teammate emails - allow optional (0 to 5 teammates)."""
-        # Allow empty list - users can register as captain only
         if not value:
             return []
-
-        # Validate that we don't have more than 5 teammates (6 total including captain)
         if len(value) > 5:
             raise serializers.ValidationError(
                 f"Maximum 5 teammates allowed. You provided {len(value)}."
             )
-
-        # Normalize emails to lowercase
         normalized_emails = [email.lower() for email in value]
-
-        # Check for duplicates
         if len(normalized_emails) != len(set(normalized_emails)):
             raise serializers.ValidationError("Duplicate emails are not allowed in the invite list.")
-
         return normalized_emails
 
     def validate(self, attrs):
-        """Root level validation."""
+        """
+        Root-level validation. Each invite mode is kept fully independent:
+        - email mode: validates attrs['teammate_emails'], stores email strings
+        - phone mode: validates attrs['teammate_phones'], stores phone strings
+        - username mode: looks up User objects, stores them in attrs['teammate_users']
+        No cross-mode resolution happens here.
+        """
         request = self.context.get('request')
         tournament_id = self.context.get('tournament_id')
 
         if not request or not tournament_id:
             raise serializers.ValidationError("Missing request context or tournament_id.")
 
-        # Verify tournament exists
+        invite_mode = attrs.get('invite_mode', 'email')
+
+        # ----- EMAIL MODE -----
+        if invite_mode == 'email':
+            emails = attrs.get('teammate_emails', [])
+            teammate_count = len(emails)
+
+            if len(emails) > 5:
+                raise serializers.ValidationError(
+                    {"teammate_emails": f"Maximum 5 teammates allowed. You provided {len(emails)}."}
+                )
+            if len(emails) != len(set(emails)):
+                raise serializers.ValidationError(
+                    {"teammate_emails": "Duplicate emails are not allowed."}
+                )
+
+            captain_email = request.user.email.lower()
+            if captain_email in emails:
+                raise serializers.ValidationError(
+                    {"teammate_emails": "You cannot add yourself as a teammate."}
+                )
+
+            attrs['teammate_emails'] = emails
+
+        # ----- PHONE MODE -----
+        elif invite_mode == 'phone':
+            phones = attrs.get('teammate_phones', [])
+            # Normalise: strip whitespace, allow +91 prefix and reduce to 10 digits
+            normalised_phones = []
+            for p in phones:
+                clean = p.strip().replace(' ', '').lstrip('+')
+                if clean.startswith('91') and len(clean) > 10:
+                    clean = clean[2:]
+                if not clean.isdigit() or len(clean) != 10:
+                    raise serializers.ValidationError(
+                        {"teammate_phones": f"'{p}' is not a valid 10-digit phone number."}
+                    )
+                normalised_phones.append(clean)
+
+            teammate_count = len(normalised_phones)
+
+            if teammate_count > 5:
+                raise serializers.ValidationError(
+                    {"teammate_phones": f"Maximum 5 teammates allowed. You provided {teammate_count}."}
+                )
+            if len(normalised_phones) != len(set(normalised_phones)):
+                raise serializers.ValidationError(
+                    {"teammate_phones": "Duplicate phone numbers are not allowed."}
+                )
+
+            # Check captain is not inviting themselves
+            captain_phone_raw = getattr(request.user, 'phone_number', '') or ''
+            captain_phone = captain_phone_raw.strip().lstrip('+')
+            if captain_phone.startswith('91') and len(captain_phone) > 10:
+                captain_phone = captain_phone[2:]
+            if captain_phone and captain_phone in normalised_phones:
+                raise serializers.ValidationError(
+                    {"teammate_phones": "You cannot add yourself as a teammate."}
+                )
+
+            attrs['teammate_phones'] = normalised_phones
+
+        # ----- USERNAME MODE -----
+        elif invite_mode == 'username':
+            usernames = attrs.get('teammate_usernames', [])
+
+            if len(usernames) > 5:
+                raise serializers.ValidationError(
+                    {"teammate_usernames": f"Maximum 5 teammates allowed. You provided {len(usernames)}."}
+                )
+
+            normalised = [u.strip() for u in usernames]
+            if len(normalised) != len(set(u.lower() for u in normalised)):
+                raise serializers.ValidationError(
+                    {"teammate_usernames": "Duplicate usernames are not allowed."}
+                )
+
+            captain_username = request.user.username.lower()
+            user_objects = []
+            for uname in normalised:
+                if uname.lower() == captain_username:
+                    raise serializers.ValidationError(
+                        {"teammate_usernames": "You cannot add yourself as a teammate."}
+                    )
+                try:
+                    u = User.objects.get(username__iexact=uname, user_type='player')
+                    user_objects.append(u)
+                except User.DoesNotExist:
+                    raise serializers.ValidationError(
+                        {"teammate_usernames": f"Player '{uname}' not found."}
+                    )
+
+            teammate_count = len(user_objects)
+            attrs['teammate_users'] = user_objects
+
+        else:
+            teammate_count = 0
+
+        # ----- TOURNAMENT CHECKS (shared) -----
         from tournaments.models import Tournament
         try:
             tournament = Tournament.objects.get(id=tournament_id)
@@ -313,7 +443,6 @@ class TournamentRegistrationInitSerializer(serializers.Serializer):
             )
 
         # Also check if user is already a member of any team in this tournament
-        # (they may have accepted an invite for a team in this tournament)
         already_in_team = TournamentRegistration.objects.filter(
             tournament=tournament
         ).filter(
@@ -325,44 +454,54 @@ class TournamentRegistrationInitSerializer(serializers.Serializer):
                 {"error": "You are already registered for this tournament via an accepted team invite. You cannot register separately."}
             )
 
-        # Verify that captain's email is not in the teammate emails
-        captain_email = request.user.email.lower()
-        teammate_emails = attrs['teammate_emails']
-        if captain_email in teammate_emails:
-            raise serializers.ValidationError(
-                {"teammate_emails": "Captain's email cannot be in the teammate list."}
-            )
-
-        # VALIDATE MANDATORY TEAMMATE EMAILS BASED ON GAME MODE
-        # For 5v5 games (Valorant, COD) - Need exactly 4 teammates (5 total including captain)
-        # For Squad mode games (BGMI) - Need exactly 3 teammates (4 total including captain)
+        # VALIDATE MANDATORY TEAMMATES BASED ON GAME MODE
         game_name = tournament.game_name.lower()
         game_mode = tournament.game_mode
 
         required_teammates = 0
         if game_mode == "5v5" or (game_name in ["valorant", "cod", "call of duty"]):
-            required_teammates = 4  # 5v5 needs 4 teammates + captain
+            required_teammates = 4
         elif game_mode == "Squad" and game_name in ["bgmi", "pubg"]:
-            required_teammates = 3  # Squad BGMI needs 3 teammates + captain (4 total)
+            required_teammates = 3
 
-        if required_teammates > 0 and len(teammate_emails) < required_teammates:
+        if required_teammates > 0 and teammate_count < required_teammates:
+            if invite_mode == 'phone':
+                error_field = "teammate_phones"
+            elif invite_mode == 'username':
+                error_field = "teammate_usernames"
+            else:
+                error_field = "teammate_emails"
             raise serializers.ValidationError(
                 {
-                    "teammate_emails": f"This tournament requires {required_teammates} teammate email(s) for {game_mode} mode in {tournament.game_name}. You provided {len(teammate_emails)}."
+                    error_field: f"This tournament requires {required_teammates} teammate(s) for {game_mode} mode in {tournament.game_name}. You provided {teammate_count}."
                 }
             )
 
-        # Check that each teammate email is not already invited to this tournament
-        for email in teammate_emails:
-            existing_invite = TeamJoinRequest.objects.filter(
-                invited_email=email.lower(),
-                tournament_registration__tournament=tournament,
-                status__in=['pending', 'accepted']
-            ).exists()
+        # Check that each email is not already invited (email mode only)
+        if invite_mode == 'email':
+            for email in attrs.get('teammate_emails', []):
+                existing_invite = TeamJoinRequest.objects.filter(
+                    invited_email=email.lower(),
+                    tournament_registration__tournament=tournament,
+                    status__in=['pending', 'accepted']
+                ).exists()
+                if existing_invite:
+                    raise serializers.ValidationError(
+                        {"teammate_emails": f"A player with email '{email}' is already invited to this tournament."}
+                    )
 
-            if existing_invite:
-                raise serializers.ValidationError(
-                    {"teammate_emails": f"{email} is already invited to this tournament."}
-                )
+        # Check that each username invite is not already pending (username mode only)
+        if invite_mode == 'username':
+            for user_obj in attrs.get('teammate_users', []):
+                existing_invite = TeamJoinRequest.objects.filter(
+                    player=user_obj,
+                    invite_type='username',
+                    tournament_registration__tournament=tournament,
+                    status__in=['pending', 'accepted']
+                ).exists()
+                if existing_invite:
+                    raise serializers.ValidationError(
+                        {"teammate_usernames": f"Player '{user_obj.username}' is already invited to this tournament."}
+                    )
 
         return attrs

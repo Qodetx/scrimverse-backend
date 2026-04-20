@@ -9,8 +9,8 @@ from django.http import HttpResponse
 from django.utils import timezone
 from django.utils.html import format_html
 
-from accounts.models import HostProfile, PlayerProfile
-from tournaments.tasks import send_host_approved_email_task
+from accounts.models import HostProfile, Notification, PlayerProfile
+from tournaments.tasks import send_host_approved_email_task, send_host_rejected_email_task
 
 
 @admin.register(PlayerProfile)
@@ -282,6 +282,18 @@ class HostProfileAdmin(admin.ModelAdmin):
                     approved_at=timezone.now().strftime("%B %d, %Y at %I:%M %p"),
                     host_dashboard_url=f"{frontend_url}/host/dashboard",
                 )
+                # In-app notification
+                try:
+                    Notification.objects.create(
+                        user=host_profile.user,
+                        type='verification_approved',
+                        title='Verification Approved',
+                        # message='Your Aadhaar verification has been approved by the admin. You can now host verified tournaments.',
+                        message='Your Account verification has been approved by the admin. You can now host verified tournaments.',
+
+                    )
+                except Exception:
+                    pass
 
         self.message_user(
             request,
@@ -292,14 +304,46 @@ class HostProfileAdmin(admin.ModelAdmin):
     approve_verification.short_description = "✓ Approve Aadhar Verification"
 
     def reject_verification(self, request, queryset):
-        """Reject Aadhar verification for selected hosts"""
-        updated = queryset.update(verification_status="rejected")
+        """Reject host verification and notify host by email with rejection reason"""
+        frontend_url = settings.CORS_ALLOWED_ORIGINS[0]
+        rejected_count = 0
+
+        for host_profile in queryset:
+            if host_profile.verification_status != "rejected":
+                host_profile.verification_status = "rejected"
+                host_profile.save()
+                rejected_count += 1
+
+                rejection_reason = (
+                    host_profile.verification_notes
+                    or "Your application did not meet our current requirements. Please contact support for details."
+                )
+
+                send_host_rejected_email_task.delay(
+                    user_email=host_profile.user.email,
+                    user_name=host_profile.user.username,
+                    host_name=host_profile.user.username,
+                    rejection_reason=rejection_reason,
+                    login_url=f"{frontend_url}/host/login",
+                )
+                # In-app notification
+                try:
+                    Notification.objects.create(
+                        user=host_profile.user,
+                        type='verification_rejected',
+                        title='Verification Rejected',
+                        message=f'Your Aadhaar verification was not approved. Reason: {rejection_reason}',
+                    )
+                except Exception:
+                    pass
+
         self.message_user(
             request,
-            f"{updated} host(s) Aadhar verification rejected. Please add rejection notes in the host profile.",
+            f"{rejected_count} host(s) rejected. Rejection emails sent. "
+            f"Add rejection reason in verification_notes field before rejecting for best results.",
         )
 
-    reject_verification.short_description = "✗ Reject Aadhar Verification"
+    reject_verification.short_description = "✗ Reject Verification (sends email)"
 
     def export_hosts_csv(self, request, queryset):
         """Export hosts to CSV"""

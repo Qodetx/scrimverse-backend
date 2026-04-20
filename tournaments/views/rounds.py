@@ -5,7 +5,7 @@ from django.core.cache import cache
 from rest_framework import generics
 from rest_framework.response import Response
 
-from accounts.models import HostProfile
+from accounts.models import HostProfile, Notification, TeamMember
 from tournaments.models import RoundScore, Tournament, TournamentRegistration
 from tournaments.views.permissions import IsHostUser
 
@@ -47,20 +47,57 @@ class StartRoundView(generics.GenericAPIView):
         if not tournament.round_status:
             tournament.round_status = {}
 
+        round_key = str(round_number)
+        existing_status = tournament.round_status.get(round_key)
+        was_preconfigured = (
+            isinstance(existing_status, dict) and existing_status.get("status") == "pre_configured"
+        )
+
         # Set current round and status
         tournament.current_round = round_number
-        tournament.round_status[str(round_number)] = "ongoing"
+        tournament.round_status[round_key] = "ongoing"
 
         # Initialize selected_teams for this round if not exists
         if not tournament.selected_teams:
             tournament.selected_teams = {}
-        if str(round_number) not in tournament.selected_teams:
-            tournament.selected_teams[str(round_number)] = []
+        if round_key not in tournament.selected_teams:
+            tournament.selected_teams[round_key] = []
 
         tournament.save(update_fields=["current_round", "round_status", "selected_teams"])
         cache.delete("tournaments:list:all")
 
         logger.info(f"Round started - Tournament: {tournament.id}, Round: {round_number}, Status: ongoing")
+
+        # If groups were pre-configured, now that the round is truly starting send slot_list notifications
+        if was_preconfigured:
+            try:
+                registrations = TournamentRegistration.objects.filter(
+                    tournament=tournament, status="confirmed"
+                ).select_related("team")
+                notifications = []
+                for reg in registrations:
+                    member_user_ids = TeamMember.objects.filter(
+                        team=reg.team, user__isnull=False
+                    ).values_list("user_id", flat=True)
+                    for user_id in member_user_ids:
+                        notifications.append(
+                            Notification(
+                                user_id=user_id,
+                                type="slot_list",
+                                title="Groups Assigned",
+                                message=f"Groups have been locked for {tournament.title}. Check your slot list!",
+                                related_id=tournament.id,
+                                related_type="tournament",
+                            )
+                        )
+                if notifications:
+                    Notification.objects.bulk_create(notifications)
+                    logger.info(
+                        f"Slot list notifications sent on round start (pre-configured) - "
+                        f"Tournament: {tournament.id}, Round: {round_number}, Players notified: {len(notifications)}"
+                    )
+            except Exception as e:
+                logger.error(f"Failed to send slot list notifications on round start: {e}", exc_info=True)
 
         return Response(
             {
@@ -310,6 +347,37 @@ class SelectWinnerView(generics.GenericAPIView):
 
         # Get winner registration details
         winner_registration = TournamentRegistration.objects.get(id=winner_id_int, tournament=tournament)
+
+        # Winner notifications are now sent from EndTournamentView (manage.py) only.
+        # Commented out to avoid duplicate notifications when rounds.py and groups.py both fire.
+        # try:
+        #     registrations = TournamentRegistration.objects.filter(
+        #         tournament=tournament, status="confirmed"
+        #     ).select_related("team")
+        #     winner_team_name = winner_registration.team_name or winner_registration.player.user.username
+        #     notifications = []
+        #     for reg in registrations:
+        #         member_user_ids = TeamMember.objects.filter(
+        #             team=reg.team, user__isnull=False
+        #         ).values_list("user_id", flat=True)
+        #         for user_id in member_user_ids:
+        #             notifications.append(
+        #                 Notification(
+        #                     user_id=user_id,
+        #                     type="tournament_result",
+        #                     title="Winner Declared",
+        #                     message=f"{winner_team_name} has won {tournament.title}!",
+        #                     related_id=tournament.id,
+        #                     related_type="tournament",
+        #                 )
+        #             )
+        #     if notifications:
+        #         Notification.objects.bulk_create(notifications)
+        #         logger.info(
+        #             f"Winner notifications sent - Tournament: {tournament.id}, Winner: {winner_team_name}, Players notified: {len(notifications)}"
+        #         )
+        # except Exception as e:
+        #     logger.error(f"Failed to send winner notifications: {e}", exc_info=True)
 
         return Response(
             {

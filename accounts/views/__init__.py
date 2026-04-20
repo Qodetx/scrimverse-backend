@@ -6,6 +6,7 @@ from accounts.views.auth import (  # noqa: F401
     LoginView,
     GoogleAuthView,
     CurrentUserView,
+    ChangePasswordView,
 )
 
 from accounts.views.profile import (  # noqa: F401
@@ -17,6 +18,11 @@ from accounts.views.profile import (  # noqa: F401
     UserDetailView,
     PlayerUsernameSearchView,
     HostSearchView,
+    ExportDataView,
+    DeleteAccountView,
+    RequestDataExportView,
+    DataExportDetailView,
+    DataExportPDFView,
 )
 
 from accounts.views.team import (  # noqa: F401
@@ -25,4 +31,11 @@ from accounts.views.team import (  # noqa: F401
     RetrieveInviteDetailsView,
     AcceptInviteView,
     DeclineInviteView,
+)
+
+from accounts.views.otp_views import (  # noqa: F401
+    SendOTPView,
+    UpdatePhoneView,
+    SendRegistrationOTPView,
+    VerifyRegistrationOTPView,
 )

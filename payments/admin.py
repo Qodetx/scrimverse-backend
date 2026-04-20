@@ -2,6 +2,7 @@ import json
 
 from django.contrib import admin
 from django.utils.html import format_html
+from django.utils.safestring import mark_safe
 
 from pygments import highlight
 from pygments.formatters import HtmlFormatter
@@ -78,9 +79,6 @@ class PaymentAdmin(admin.ModelAdmin):
         "user__email",
     ]
     readonly_fields = [
-        "merchant_order_id",
-        "phonepe_order_id",
-        "phonepe_transaction_id",
         "amount_paisa",
         "redirect_url",
         "callback_data",
@@ -167,7 +165,7 @@ class PaymentAdmin(admin.ModelAdmin):
         response = highlight(response, JsonLexer(), formatter)
         style = "<style>" + formatter.get_style_defs() + "</style>"
 
-        return format_html(style + response)
+        return mark_safe(style + response)
 
     meta_info_pretty.short_description = "Formatted Meta Info"
 

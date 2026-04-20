@@ -192,7 +192,11 @@ class TournamentAdmin(admin.ModelAdmin):
 
     def participant_info(self, obj):
         """Show participant count with progress bar"""
-        percentage = (obj.current_participants / obj.max_participants * 100) if obj.max_participants > 0 else 0
+        # Ensure values are not None to avoid TypeError
+        max_p = obj.max_participants or 0
+        curr_p = obj.current_participants or 0
+        
+        percentage = (curr_p / max_p * 100) if max_p > 0 else 0
         color = "#28a745" if percentage >= 80 else "#ffc107" if percentage >= 50 else "#dc3545"
 
         return format_html(
@@ -203,8 +207,8 @@ class TournamentAdmin(admin.ModelAdmin):
             "</div></div>",
             color,
             min(percentage, 100),
-            obj.current_participants,
-            obj.max_participants,
+            curr_p,
+            max_p,
         )
 
     participant_info.short_description = "Participants"
@@ -448,6 +452,7 @@ class TournamentRegistrationAdmin(admin.ModelAdmin):
                 "fields": (
                     "team_members",
                     "team_members_display",
+                    "invited_members_status",
                 ),
                 "description": "List of players in this team",
             },

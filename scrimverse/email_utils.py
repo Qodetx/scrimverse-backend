@@ -234,6 +234,24 @@ def send_host_approved_email(
     )
 
 
+def send_host_rejected_email(
+    user_email: str, user_name: str, host_name: str, rejection_reason: str, login_url: str
+) -> bool:
+    """Send host account rejection email with reason"""
+    context = {
+        "user_name": user_name,
+        "host_name": host_name,
+        "rejection_reason": rejection_reason or "Your application did not meet our current requirements.",
+        "login_url": login_url,
+    }
+    return EmailService.send_email(
+        subject="Update on your Scrimverse Host Application",
+        template_name="host_rejected",
+        context=context,
+        recipient_list=[user_email],
+    )
+
+
 def send_tournament_created_email(
     host_email: str,
     host_name: str,
@@ -357,11 +375,11 @@ def send_team_invite_email(
     invited_email: str,
     captain_name: str,
     team_name: str,
-    tournament_name: str,
-    game_name: str,
-    prize_pool: str,
-    invite_token: str,
-    expires_at: str,
+    tournament_name: str = "",
+    game_name: str = "",
+    prize_pool: str = "",
+    invite_token: str = "",
+    expires_at: str = "",
 ) -> bool:
     """
     Send team invitation email to an invited player.
@@ -375,14 +393,16 @@ def send_team_invite_email(
         invited_email: Recipient email address
         captain_name: Username of the captain who is inviting
         team_name: Name of the team
-        tournament_name: Name of the tournament
-        game_name: Game (e.g. BGMI, Free Fire)
-        prize_pool: Prize pool display string (e.g. "₹10,000")
-        invite_token: Unique invite token for the link
-        expires_at: Human-readable expiry string
+        tournament_name: Name of the tournament (optional)
+        game_name: Game (e.g. BGMI, Free Fire) (optional)
+        prize_pool: Prize pool display string (e.g. "₹10,000") (optional)
+        invite_token: Unique invite token for the link (optional)
+        expires_at: Human-readable expiry string (optional)
     """
     frontend_url = settings.CORS_ALLOWED_ORIGINS[0] if settings.CORS_ALLOWED_ORIGINS else "http://localhost:3000"
-    accept_link = f"{frontend_url}/join-team/{invite_token}"
+    accept_link = f"{frontend_url}/join-team/{invite_token}" if invite_token else f"{frontend_url}/teams"
+    # Decline link passes ?action=decline so the frontend can auto-decline without login
+    decline_link = f"{frontend_url}/join-team/{invite_token}?action=decline" if invite_token else f"{frontend_url}/teams"
 
     context = {
         "invited_email": invited_email,
@@ -392,11 +412,54 @@ def send_team_invite_email(
         "game_name": game_name,
         "prize_pool": prize_pool,
         "accept_link": accept_link,
+        "decline_link": decline_link,
         "expires_at": expires_at,
     }
+
+    if tournament_name:
+        subject = f"You're invited to join {team_name} for {tournament_name}!"
+    else:
+        subject = f"You're invited to join team {team_name} on ScrimVerse!"
+
     return EmailService.send_email(
-        subject=f"You're invited to join {team_name} for {tournament_name}!",
+        subject=subject,
         template_name="team_invitation",
         context=context,
         recipient_list=[invited_email],
+    )
+
+
+# ============================================================================
+# DATA EXPORT EMAILS
+# ============================================================================
+
+
+def send_data_export_email(
+    user_email: str,
+    user_name: str,
+    view_url: str,
+    pdf_url: str,
+    expires_at: str,
+) -> bool:
+    """
+    Send data export ready notification email with View and Download PDF buttons.
+
+    Args:
+        user_email: User's email address
+        user_name: User's username
+        view_url: Frontend URL to view the data export in browser
+        pdf_url: Backend URL to download the PDF version
+        expires_at: Human-readable expiry date string
+    """
+    context = {
+        "user_name": user_name,
+        "view_url": view_url,
+        "pdf_url": pdf_url,
+        "expires_at": expires_at,
+    }
+    return EmailService.send_email(
+        subject="Your ScrimVerse Data Export is Ready",
+        template_name="data_export_ready",
+        context=context,
+        recipient_list=[user_email],
     )

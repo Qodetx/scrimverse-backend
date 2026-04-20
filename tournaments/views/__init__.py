@@ -9,6 +9,7 @@ from tournaments.views.list import (  # noqa: F401
     TournamentStatsView,
     PlatformStatsView,
     HostDashboardStatsView,
+    HostAnalyticsView,
 )
 
 from tournaments.views.manage import (  # noqa: F401
@@ -54,6 +55,7 @@ from tournaments.views.groups import (  # noqa: F401
 from tournaments.views.matches import (  # noqa: F401
     StartMatchView,
     EndMatchView,
+    UpdateMatchCredentialsView,
     SubmitMatchScoresView,
     GetTeamPlayersView,
 )

@@ -1,0 +1,30 @@
+{% extends "emails/base.html" %}
+
+{% block title %}Host Account Update - {{ host_name }}{% endblock %}
+
+{% block content %}
+<div class="status-pill" style="background: rgba(239, 68, 68, 0.15); color: #ef4444;">Status: APPLICATION NOT APPROVED</div>
+
+<h1 style="color: #ffffff; font-size: 28px; margin-bottom: 20px;">Hi {{ host_name }}, an update on your host application</h1>
+
+<p>Thank you for applying to become a host on <strong>Scrimverse</strong>. After reviewing your application, we were unable to approve it at this time.</p>
+
+<div class="content-box" style="border-left: 3px solid #ef4444;">
+    <h2 style="margin-bottom: 10px; font-size: 16px; color: #ef4444;">Reason for rejection:</h2>
+    <p style="font-size: 15px; color: #ffffff;">{{ rejection_reason }}</p>
+</div>
+
+<div style="margin-top: 30px;">
+    <h2 style="margin-bottom: 10px; font-size: 16px;">What you can do next:</h2>
+    <p style="font-size: 14px; margin-bottom: 10px;">• <strong>Update your information</strong> — Log in and re-apply with the corrected details.</p>
+    <p style="font-size: 14px; margin-bottom: 10px;">• <strong>Contact our team</strong> — If you believe this was an error, reach out to us at support@scrimverse.com.</p>
+    <p style="font-size: 14px;">• <strong>Reapply</strong> — Once you've addressed the issue, you can submit a new application.</p>
+</div>
+
+<a href="{{ login_url }}" class="button" style="background: #374151;">LOG IN TO REAPPLY</a>
+
+<div style="border-top: 1px solid rgba(255, 255, 255, 0.1); margin-top: 40px; padding-top: 20px;">
+    <p style="color: #ffffff; font-weight: 700; margin-bottom: 5px;">THE SCRIMVERSE TEAM</p>
+    <p style="color: #c0ff00; font-size: 12px; font-weight: 900; text-transform: uppercase; margin: 0;">Where Practice Meets Passion</p>
+</div>
+{% endblock %}
