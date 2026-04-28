@@ -1,11 +1,17 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
 
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- Tell iOS Mail and other clients to always render in light mode -->
+    <meta name="color-scheme" content="light">
+    <meta name="supported-color-schemes" content="light">
     <title>{% block title %}Scrimverse{% endblock %}</title>
     <style>
+        /* Force light color scheme — prevents iOS Mail dark mode from inverting our colors */
+        :root { color-scheme: light; }
+
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
 
         * {
@@ -16,77 +22,71 @@
 
         body {
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background-color: #000000;
-            color: #ffffff;
-            margin: 0;
-            padding: 0;
+            background-color: #000000 !important;
+            color: #ffffff !important;
+            margin: 0 !important;
+            padding: 0 !important;
             width: 100% !important;
+            -webkit-text-size-adjust: 100%;
+            -ms-text-size-adjust: 100%;
         }
 
         .email-wrapper {
-            background-color: #000000;
-            background-image:
-                linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
-            background-size: 40px 40px;
+            background-color: #000000 !important;
             padding: 40px 20px;
+            width: 100%;
         }
 
         .email-container {
             max-width: 600px;
             margin: 0 auto;
-            background-color: #050505;
+            background-color: #050505 !important;
             border: 1px solid rgba(255, 255, 255, 0.1);
-            position: relative;
             overflow: hidden;
         }
 
         .accent-bar {
             height: 4px;
-            background-color: #c0ff00;
+            background-color: #c0ff00 !important;
             width: 100%;
+            line-height: 4px;
+            font-size: 0;
         }
 
         .email-header {
             padding: 40px 40px 20px;
             text-align: left;
+            background-color: #050505 !important;
         }
 
         .logo-text {
             font-size: 24px;
             font-weight: 900;
             letter-spacing: -1px;
-            color: #ffffff;
+            color: #ffffff !important;
             text-transform: uppercase;
         }
 
         .logo-text span {
-            color: #c0ff00;
+            color: #c0ff00 !important;
         }
 
         .email-body {
             padding: 0 40px 40px;
+            background-color: #050505 !important;
         }
 
+        /*
+         * content-box: white background with dark text.
+         * We lock these with !important so iOS Mail dark mode cannot
+         * override them and turn the box dark (making dark text invisible).
+         */
         .content-box {
-            background-color: #ffffff;
-            color: #000000;
+            background-color: #ffffff !important;
+            color: #000000 !important;
             padding: 30px;
             margin: 20px 0;
-            border-radius: 0;
-            position: relative;
-        }
-
-        /* Diagonal cut style from the image reference */
-        .content-box::after {
-            content: '';
-            position: absolute;
-            bottom: 0;
-            right: 0;
-            width: 20px;
-            height: 20px;
-            background-color: #050505;
-            clip-path: polygon(100% 0, 0 100%, 100% 100%);
+            border-left: 3px solid #c0ff00;
         }
 
         h1,
@@ -105,15 +105,23 @@
             color: rgba(255, 255, 255, 0.8);
         }
 
-        .content-box p {
-            color: #333333;
+        .content-box p,
+        .content-box li,
+        .content-box span {
+            color: #333333 !important;
             margin-bottom: 10px;
+        }
+
+        .content-box h1,
+        .content-box h2,
+        .content-box h3 {
+            color: #000000 !important;
         }
 
         .button {
             display: inline-block;
-            background-color: #9f0d0d;
-            color: #000000 !important;
+            background-color: #9f0d0d !important;
+            color: #ffffff !important;
             padding: 16px 32px;
             text-decoration: none;
             font-weight: 900;
@@ -121,13 +129,13 @@
             font-size: 14px;
             letter-spacing: 1px;
             margin-top: 20px;
-            transition: all 0.2s ease;
+            -webkit-text-size-adjust: none;
         }
 
         .footer {
             padding: 40px;
             border-top: 1px solid rgba(255, 255, 255, 0.1);
-            background-color: #000000;
+            background-color: #000000 !important;
         }
 
         .footer-logo {
@@ -140,32 +148,32 @@
         .footer-logo-svg {
             width: 30px;
             height: 30px;
-            fill: #c0ff00;
+            fill: #c0ff00 !important;
         }
 
         .stay-connected {
             font-size: 18px;
             font-weight: 900;
-            color: #ffffff;
+            color: #ffffff !important;
             margin-bottom: 10px;
         }
 
         .footer-links {
-            color: #666666;
+            color: #666666 !important;
             font-size: 12px;
             margin-top: 20px;
         }
 
         .footer-links a {
-            color: #c0ff00;
+            color: #c0ff00 !important;
             text-decoration: none;
         }
 
         .status-pill {
             display: inline-block;
             padding: 4px 12px;
-            background-color: rgba(192, 255, 0, 0.1);
-            color: #c0ff00;
+            background-color: rgba(192, 255, 0, 0.1) !important;
+            color: #c0ff00 !important;
             border: 1px solid #c0ff00;
             font-size: 10px;
             font-weight: 900;
@@ -174,38 +182,64 @@
         }
 
         @media only screen and (max-width: 600px) {
-
             .email-header,
             .email-body,
             .footer {
-                padding: 20px;
+                padding: 20px !important;
             }
 
             .content-box {
-                padding: 20px;
+                padding: 20px !important;
+            }
+        }
+
+        /* Extra guard: some clients support @media (prefers-color-scheme).
+           We explicitly re-assert light backgrounds so nothing flips dark. */
+        @media (prefers-color-scheme: dark) {
+            body, .email-wrapper {
+                background-color: #000000 !important;
+                color: #ffffff !important;
+            }
+            .email-container, .email-header, .email-body {
+                background-color: #050505 !important;
+            }
+            .content-box {
+                background-color: #ffffff !important;
+                color: #000000 !important;
+            }
+            .content-box p,
+            .content-box li,
+            .content-box span,
+            .content-box h1,
+            .content-box h2,
+            .content-box h3 {
+                color: #333333 !important;
+            }
+            .footer {
+                background-color: #000000 !important;
             }
         }
     </style>
 </head>
 
 <body>
-    <div class="email-wrapper">
-        <div class="email-container">
-            <div class="accent-bar"></div>
-            <div class="email-header">
-                <div class="logo-text">SCRIM<span>VERSE</span></div>
+    <div class="email-wrapper" style="background-color:#000000;padding:40px 20px;">
+        <div class="email-container" style="max-width:600px;margin:0 auto;background-color:#050505;border:1px solid rgba(255,255,255,0.1);overflow:hidden;">
+            <div class="accent-bar" style="height:4px;background-color:#c0ff00;width:100%;line-height:4px;font-size:0;">&nbsp;</div>
+            <div class="email-header" style="padding:40px 40px 20px;background-color:#050505;">
+                <div class="logo-text" style="font-size:24px;font-weight:900;letter-spacing:-1px;color:#ffffff;text-transform:uppercase;">SCRIM<span style="color:#c0ff00;">VERSE</span></div>
             </div>
 
-            <div class="email-body">
+            <div class="email-body" style="padding:0 40px 40px;background-color:#050505;">
                 {% block content %}{% endblock %}
             </div>
 
-            <div class="footer">
-                <div class="stay-connected">Stay Connected With Us!</div>
+            <div class="footer" style="padding:40px;border-top:1px solid rgba(255,255,255,0.1);background-color:#000000;">
+                <div class="stay-connected" style="font-size:18px;font-weight:900;color:#ffffff;margin-bottom:10px;">Stay Connected With Us!</div>
                 <p style="font-size: 14px; color: #666666; margin-bottom: 20px;">
                     Where Practice Meets Passion. The ultimate HQ for your esports journey.
                 </p>
-                <div class="footer-logo">
+                <div class="footer-logo" style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">
                     <!-- Minimalist Logo representation -->
                     <svg class="footer-logo-svg" viewBox="0 0 24 24">
                         <path
@@ -213,10 +247,10 @@
                     </svg>
                     <span style="font-weight: 900; letter-spacing: -0.5px;">SCRIMVERSE</span>
                 </div>
-                <div class="footer-links">
-                    <a href="https://scrimverse.com">WWW.SCRIMVERSE.COM</a> |
-                    <a href="mailto:support@scrimverse.com">CONTACT SUPPORT</a>
-                    <p style="margin-top: 10px;">© 2026 SCRIMVERSE. ALL RIGHTS RESERVED.</p>
+                <div class="footer-links" style="color:#666666;font-size:12px;margin-top:20px;">
+                    <a href="https://scrimverse.com" style="color:#c0ff00;text-decoration:none;">WWW.SCRIMVERSE.COM</a> |
+                    <a href="mailto:support@scrimverse.com" style="color:#c0ff00;text-decoration:none;">CONTACT SUPPORT</a>
+                    <p style="margin-top:10px;color:#666666;">© 2026 SCRIMVERSE. ALL RIGHTS RESERVED.</p>
                 </div>
             </div>
         </div>
