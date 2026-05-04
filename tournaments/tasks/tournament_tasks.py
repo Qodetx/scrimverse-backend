@@ -631,19 +631,28 @@ def send_temp_team_24h_reminders():
 def cleanup_expired_temp_teams():
     """
     Runs every hour.
-    Deletes temporary teams whose 48h conversion window has passed
-    without the captain accepting. Notifies captain before deleting.
+
+    Two cleanup paths:
+      1. Legacy team-level temp (Team.is_temporary=True) — entire team deleted
+         when its 48h window passes without the captain accepting.
+      2. Per-member temp (TeamMember.is_temporary=True) — only the individual
+         membership is removed when ITS 48h window passes. The team and other
+         members are unaffected. If the team becomes empty as a result, the
+         team itself is deleted.
     """
+    from accounts.models import TeamMember
+
     now = timezone.now()
-    expired = Team.objects.filter(
+
+    # ─── 1. Legacy team-level cleanup (unchanged) ──────────────────────────
+    expired_teams = Team.objects.filter(
         is_temporary=True,
         conversion_deadline__isnull=False,
         conversion_deadline__lt=now,
     )
 
-    count = 0
-    for team in expired:
-        # Notify the captain that the team was deleted
+    team_count = 0
+    for team in expired_teams:
         try:
             if should_notify(team.captain, 'tournamentUpdates'):
                 Notification.objects.create(
@@ -660,9 +669,61 @@ def cleanup_expired_temp_teams():
                 )
         except Exception as e:
             logger.warning(f"Failed to send deletion notification for team {team.id}: {e}")
-        count += 1
+        team_count += 1
 
-    expired.delete()
-    if count:
-        logger.info(f"Deleted {count} expired temporary teams")
-    return {"deleted": count}
+    expired_teams.delete()
+
+    # ─── 2. Per-member cleanup (new logic) ─────────────────────────────────
+    expired_memberships = TeamMember.objects.filter(
+        is_temporary=True,
+        conversion_deadline__isnull=False,
+        conversion_deadline__lt=now,
+        team__is_temporary=False,  # legacy temp teams handled above
+    ).select_related("team", "user")
+
+    membership_count = 0
+    affected_team_ids = set()
+    for membership in expired_memberships:
+        # Don't auto-remove captain — would orphan the team. Captains who
+        # ignore the prompt keep the team but their membership stays temp.
+        if membership.is_captain:
+            continue
+        try:
+            if membership.user and should_notify(membership.user, 'tournamentUpdates'):
+                Notification.objects.create(
+                    user=membership.user,
+                    type="team_membership_expired",
+                    related_id=membership.team.id,
+                    related_type="team",
+                    title="Removed from team",
+                    message=(
+                        f"You were removed from '{membership.team.name}' because the 48-hour "
+                        f"window to keep it as your permanent team expired without a decision."
+                    ),
+                    is_read=False,
+                )
+        except Exception as e:
+            logger.warning(f"Failed to send membership-expiry notification for member {membership.id}: {e}")
+        affected_team_ids.add(membership.team_id)
+        membership.delete()
+        membership_count += 1
+
+    # If any team is now empty (no members left), delete it too
+    orphan_team_count = 0
+    for team_id in affected_team_ids:
+        team = Team.objects.filter(id=team_id).first()
+        if team and not team.members.exists():
+            team.delete()
+            orphan_team_count += 1
+
+    if team_count or membership_count or orphan_team_count:
+        logger.info(
+            f"Cleanup: deleted {team_count} legacy-temp teams, "
+            f"{membership_count} expired memberships, {orphan_team_count} orphan teams"
+        )
+
+    return {
+        "deleted_legacy_teams": team_count,
+        "deleted_memberships": membership_count,
+        "deleted_orphan_teams": orphan_team_count,
+    }

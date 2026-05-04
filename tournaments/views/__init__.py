@@ -50,6 +50,7 @@ from tournaments.views.groups import (  # noqa: F401
     ConfigureRoundView,
     RoundGroupsListView,
     RoundResultsView,
+    RoundSlotListExportView,
 )
 
 from tournaments.views.matches import (  # noqa: F401
@@ -58,4 +59,9 @@ from tournaments.views.matches import (  # noqa: F401
     UpdateMatchCredentialsView,
     SubmitMatchScoresView,
     GetTeamPlayersView,
+)
+
+from tournaments.views.sponsors import (  # noqa: F401
+    TournamentSponsorListCreateView,
+    TournamentSponsorDetailView,
 )

@@ -87,6 +87,16 @@ class SendOTPView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Block if phone is already verified on another account
+        if purpose == 'phone_change':
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            if User.objects.filter(phone_number=digits, is_phone_verified=True).exclude(pk=request.user.pk).exists():
+                return Response(
+                    {"error": "This phone number is already registered to another account."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         # Rate limiting
         rate_key = _rate_key(request.user.id)
         current_count = cache.get(rate_key, 0)
@@ -150,6 +160,15 @@ class UpdatePhoneView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Check phone is not already used by another account
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        if User.objects.filter(phone_number=digits, is_phone_verified=True).exclude(pk=request.user.pk).exists():
+            return Response(
+                {"error": "This phone number is already registered to another account."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         # Update phone and mark as verified
         request.user.phone_number = digits
         request.user.is_phone_verified = True
@@ -203,8 +222,8 @@ class SendRegistrationOTPView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Check if phone is already registered
-        if User.objects.filter(phone_number=digits, is_active=True).exists():
+        # Check if phone is already verified on another account
+        if User.objects.filter(phone_number=digits, is_phone_verified=True).exists():
             return Response(
                 {"error": "This phone number is already registered with another account."},
                 status=status.HTTP_400_BAD_REQUEST,

@@ -390,8 +390,27 @@ def check_payment_status(request):
                                         team=team_instance, username=username, user=user_obj, is_captain=is_cap
                                     )
                             else:
+                                # Per-member temp logic: team itself is permanent. Captain's
+                                # membership is temp only if they already have a perm team
+                                # for this game.
+                                from accounts.team_helpers import determine_member_temp_status
+                                cap_temp, cap_deadline = determine_member_temp_status(
+                                    player.user, tournament.game_name, tournament
+                                )
                                 team_instance = Team.objects.create(
-                                    name=team_name, captain=player.user, is_temporary=True
+                                    name=team_name,
+                                    captain=player.user,
+                                    is_temporary=False,
+                                    game=tournament.game_name,
+                                    linked_tournament=tournament,
+                                )
+                                TeamMember.objects.create(
+                                    team=team_instance,
+                                    user=player.user,
+                                    username=player.user.username,
+                                    is_captain=True,
+                                    is_temporary=cap_temp,
+                                    conversion_deadline=cap_deadline,
                                 )
 
                             # Prepare team members data

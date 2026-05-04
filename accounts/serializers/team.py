@@ -14,7 +14,10 @@ class TeamMemberSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = TeamMember
-        fields = ("id", "username", "user", "is_captain", "role")
+        fields = (
+            "id", "username", "user", "is_captain", "role",
+            "is_temporary", "conversion_deadline",
+        )
 
 
 class TeamSerializer(serializers.ModelSerializer):
@@ -26,6 +29,9 @@ class TeamSerializer(serializers.ModelSerializer):
     stats_by_game = serializers.SerializerMethodField()
     overall_stats = serializers.SerializerMethodField()
     linked_tournament_info = serializers.SerializerMethodField()
+    is_temporary_for_me = serializers.SerializerMethodField()
+    my_conversion_deadline = serializers.SerializerMethodField()
+    invited_members = serializers.SerializerMethodField()
 
     def get_members(self, obj):
         """Get all team members INCLUDING the captain, excluding captain from TeamMember list to avoid duplication"""
@@ -91,6 +97,77 @@ class TeamSerializer(serializers.ModelSerializer):
             }
         return None
 
+    def _current_user_membership(self, obj):
+        """Returns the requesting user's TeamMember row on this team, or None."""
+        request = self.context.get("request")
+        if not request or not getattr(request, "user", None) or not request.user.is_authenticated:
+            return None
+        return obj.members.filter(user=request.user).first()
+
+    def get_is_temporary_for_me(self, obj):
+        """
+        Whether this team should be presented as temporary to the *current user*.
+
+        - Legacy team-level flag: True for everyone if Team.is_temporary is True.
+        - Per-member flag: True if the current user's TeamMember has is_temporary=True.
+        """
+        if getattr(obj, "is_temporary", False):
+            return True
+        membership = self._current_user_membership(obj)
+        return bool(membership and membership.is_temporary)
+
+    def get_my_conversion_deadline(self, obj):
+        """The current user's per-member 48h conversion deadline, if any."""
+        membership = self._current_user_membership(obj)
+        if membership and membership.is_temporary:
+            return membership.conversion_deadline
+        # Fall back to legacy team-level deadline if team itself is temp
+        if getattr(obj, "is_temporary", False):
+            return obj.conversion_deadline
+        return None
+
+    def get_invited_members(self, obj):
+        """
+        Outgoing invites for this team that are still actionable — pending,
+        rejected, or expired. Accepted invites are excluded because the
+        invitee is already a real TeamMember and shows up in `members`.
+
+        Used by the Teams tab so the captain can see at a glance who they
+        invited (and resend if needed) instead of panicking when the team
+        looks empty after a fresh registration.
+        """
+        invites = obj.join_requests.filter(
+            request_type="invite",
+            status__in=["pending", "rejected", "expired"],
+        ).select_related("player").order_by("created_at")
+
+        result = []
+        for inv in invites:
+            # Identifier is what the captain typed — phone, email, or username
+            if inv.invite_type == "phone":
+                identifier = inv.phone_number or ""
+                display_name = inv.phone_number or ""
+            elif inv.invite_type == "email":
+                identifier = inv.invited_email or ""
+                display_name = inv.invited_email or ""
+            elif inv.invite_type == "username":
+                identifier = inv.player.username if inv.player else ""
+                display_name = identifier
+            else:  # link
+                identifier = inv.invite_token or ""
+                display_name = "Invite link"
+
+            result.append({
+                "id": inv.id,
+                "invite_type": inv.invite_type,
+                "identifier": identifier,
+                "display_name": display_name,
+                "status": inv.status,
+                "created_at": inv.created_at,
+                "expires_at": inv.invite_expires_at,
+            })
+        return result
+
     def get_overall_stats(self, obj):
         """Get aggregate statistics across all games - aggregate from game-specific rows"""
         # Aggregate wins and points from all game-specific rows (exclude 'ALL')
@@ -119,6 +196,27 @@ class TeamSerializer(serializers.ModelSerializer):
         tournament_matches = aggregated['total_tournament_matches'] or 0
         scrim_matches = aggregated['total_scrim_matches'] or 0
 
+        # K/D as kills-per-match (true K/D requires deaths tracking which we
+        # don't store today). Surfaced on team search cards so users can
+        # quickly compare team performance.
+        kd_ratio = round(total_kills / matches_played, 2) if matches_played > 0 else 0
+
+        # "Recent" = matches the team played in the last 30 days, counted
+        # via MatchScore rows linked to the team's TournamentRegistration
+        # records. Used by team search results to indicate activity.
+        recent_matches_count = 0
+        try:
+            from datetime import timedelta
+            from django.utils import timezone
+            from tournaments.models import MatchScore
+            cutoff = timezone.now() - timedelta(days=30)
+            recent_matches_count = MatchScore.objects.filter(
+                team__team=obj,
+                match__ended_at__gte=cutoff,
+            ).values('match_id').distinct().count()
+        except Exception:
+            recent_matches_count = 0
+
         return {
             'tournament_wins': aggregated['total_tournament_wins'] or 0,
             'scrim_wins': aggregated['total_scrim_wins'] or 0,
@@ -134,6 +232,8 @@ class TeamSerializer(serializers.ModelSerializer):
             'matches_played': matches_played,
             'tournament_matches': tournament_matches,
             'scrim_matches': scrim_matches,
+            'kd_ratio': kd_ratio,
+            'recent_matches': recent_matches_count,
         }
 
     class Meta:
@@ -149,6 +249,9 @@ class TeamSerializer(serializers.ModelSerializer):
             "created_at",
             "is_temporary",
             "conversion_deadline",
+            "is_temporary_for_me",
+            "my_conversion_deadline",
+            "invited_members",
             "linked_tournament_info",
             "game",
             "total_matches",

@@ -210,8 +210,10 @@ class PlayerUsernameSearchView(APIView):
         # If searching for team invites, exclude players already in a permanent team for the same game
         if for_team:
             # Exclude players already in a permanent team for this specific game
-            # (one permanent team per player per game — different games are allowed)
-            team_filter = {"team__is_temporary": False}
+            # (one permanent team per player per game — different games are allowed).
+            # Per per-member temp logic: a player is "in a perm team" only when both the
+            # team itself and their membership in it are non-temporary.
+            team_filter = {"team__is_temporary": False, "is_temporary": False}
             if game:
                 team_filter["team__game"] = game
             users_in_same_game_team = TeamMember.objects.filter(**team_filter).values_list("user_id", flat=True)
@@ -240,7 +242,9 @@ class PlayerUsernameSearchView(APIView):
                 "username": player.user.username,
                 "email": player.user.email,
                 "profile_picture": player.user.profile_picture.url if player.user.profile_picture else None,
-                "in_team": TeamMember.objects.filter(user=player.user, team__is_temporary=False).exists()
+                "in_team": TeamMember.objects.filter(
+                    user=player.user, team__is_temporary=False, is_temporary=False
+                ).exists()
                 if not for_team
                 else False,
             }

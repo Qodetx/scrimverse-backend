@@ -188,10 +188,14 @@ class TeamViewSet(viewsets.ModelViewSet):
             f"Create team request - Captain: {self.request.user.id}, Team name: {self.request.data.get('name')}"
         )
 
-        # Check if user is already in a PERMANENT team for the same game (temporary teams are allowed)
+        # Check if user is already in a PERMANENT team for the same game (temporary teams are allowed).
+        # "Permanent" means: team is not legacy-temp AND this user's membership is not temp.
         game = self.request.data.get('game', '')
         existing_membership = TeamMember.objects.filter(
-            user=self.request.user, team__is_temporary=False, team__game=game
+            user=self.request.user,
+            is_temporary=False,
+            team__is_temporary=False,
+            team__game=game,
         ).exists()
         if existing_membership:
             raise ValidationError({"error": f"You already have a permanent {game} team. Leave it first before creating a new one."})
@@ -276,13 +280,33 @@ class TeamViewSet(viewsets.ModelViewSet):
         if TeamMember.objects.filter(team=team, username=username).exists():
             return Response({"error": "Member already exists"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Check if user is already in another PERMANENT team for the same game
-        if TeamMember.objects.filter(user=user, team__is_temporary=False, team__game=team.game).exclude(team=team).exists():
+        # Check if user is already in another PERMANENT team for the same game.
+        # "Permanent" means: team itself is not legacy-temp AND user's membership in it is not temp.
+        already_perm = TeamMember.objects.filter(
+            user=user,
+            is_temporary=False,
+            team__is_temporary=False,
+            team__game=team.game,
+        ).exclude(team=team).exists()
+
+        # New member added directly to a perm team — set their per-member temp flag.
+        from accounts.team_helpers import determine_member_temp_status
+        member_temp, member_deadline = determine_member_temp_status(user, team.game, None)
+
+        # Block only when this team itself is perm AND member already perm in another team.
+        if already_perm and not team.is_temporary and not member_temp:
             return Response(
                 {"error": f"{username} is already a member of another {team.game} team"}, status=status.HTTP_400_BAD_REQUEST
             )
 
-        member = TeamMember.objects.create(team=team, username=username, user=user, is_captain=False)
+        member = TeamMember.objects.create(
+            team=team,
+            username=username,
+            user=user,
+            is_captain=False,
+            is_temporary=member_temp,
+            conversion_deadline=member_deadline,
+        )
 
         logger.debug(f"Member added - Team: {team.id}, Member: {username}, User ID: {user.id}")
 
@@ -470,8 +494,15 @@ class TeamViewSet(viewsets.ModelViewSet):
         if TeamMember.objects.filter(user=request.user, team=team).exists():
             return Response({"error": "You are already a member of this team"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Check if user is already in a PERMANENT team for the same game
-        if team.game and TeamMember.objects.filter(user=request.user, team__is_temporary=False, team__game=team.game).exists():
+        # Check if user is already in a PERMANENT team for the same game.
+        # Note: this only blocks if THIS team is also perm; if THIS team is legacy-temp,
+        # joining is fine since the user's membership here will be temporary anyway.
+        if team.game and not team.is_temporary and TeamMember.objects.filter(
+            user=request.user,
+            is_temporary=False,
+            team__is_temporary=False,
+            team__game=team.game,
+        ).exists():
             return Response({"error": f"You are already a member of a {team.game} team"}, status=status.HTTP_400_BAD_REQUEST)
 
         # Check if team is full
@@ -548,8 +579,15 @@ class TeamViewSet(viewsets.ModelViewSet):
         except User.DoesNotExist:
             return Response({"error": "Player not found"}, status=status.HTTP_404_NOT_FOUND)
 
-        # Check if player is already in a PERMANENT team for the same game
-        if TeamMember.objects.filter(user=player, team__is_temporary=False, team__game=team.game).exists():
+        # Check if player is already in a PERMANENT team for the same game.
+        # Only block when THIS team is perm — invites to legacy temp teams are fine
+        # since the player's membership in those is temp anyway.
+        if not team.is_temporary and TeamMember.objects.filter(
+            user=player,
+            is_temporary=False,
+            team__is_temporary=False,
+            team__game=team.game,
+        ).exists():
             return Response({"error": f"Player is already a member of a {team.game} team"}, status=status.HTTP_400_BAD_REQUEST)
 
         # Check if team is full
@@ -634,9 +672,9 @@ class TeamViewSet(viewsets.ModelViewSet):
 
         if action == "accept":
             team = invite.team
-            # Check if player is already in a permanent team for the same game (only block for permanent teams)
-            if not team.is_temporary and TeamMember.objects.filter(user=request.user, team__is_temporary=False, team__game=team.game).exists():
-                return Response({"error": f"You are already a member of a {team.game} team"}, status=status.HTTP_400_BAD_REQUEST)
+            # NOTE: Joining is always allowed even if the user already has a perm team for
+            # this game — their membership in the new team will simply be marked temporary
+            # (per-member temp logic) and they get the convert/decline prompt later.
 
             # Check if player is already registered in the same tournament via another team
             if invite.tournament_registration:
@@ -656,8 +694,22 @@ class TeamViewSet(viewsets.ModelViewSet):
             if team.members.count() >= 15:
                 return Response({"error": "Team is full"}, status=status.HTTP_400_BAD_REQUEST)
 
-            # Add member
-            TeamMember.objects.create(team=team, user=request.user, username=request.user.username, is_captain=False)
+            # Add member with per-member temp flag based on existing perm-team check
+            from accounts.team_helpers import determine_member_temp_status
+            tournament_for_deadline = (
+                invite.tournament_registration.tournament if invite.tournament_registration_id else None
+            )
+            member_temp, member_deadline = determine_member_temp_status(
+                request.user, team.game, tournament_for_deadline
+            )
+            TeamMember.objects.create(
+                team=team,
+                user=request.user,
+                username=request.user.username,
+                is_captain=False,
+                is_temporary=member_temp,
+                conversion_deadline=member_deadline,
+            )
             invite.status = "accepted"
             invite.save()
 
@@ -926,24 +978,89 @@ class TeamViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def convert_permanent(self, request, pk=None):
         """
-        Accept the 48h conversion offer and make the temp team permanent.
+        Accept the 48h conversion offer.
+
+        Per-member temp logic (default for new teams):
+            Marks the *current user's* TeamMember.is_temporary=False — i.e. this
+            team becomes their permanent team for the game. Other members'
+            decisions are independent.
+
+        Legacy team-level temp (Team.is_temporary=True):
+            Captain-only. Marks the whole team permanent and auto-kicks members
+            who already have perm teams for the same game.
+
         POST /api/accounts/teams/{id}/convert_permanent/
-        Only the team captain can call this.
         """
         team = self.get_object()
 
+        # ─── Per-member flow (new teams) ────────────────────────────────────
+        if not team.is_temporary:
+            membership = TeamMember.objects.filter(team=team, user=request.user).first()
+            if not membership:
+                return Response({"error": "You are not a member of this team"}, status=status.HTTP_404_NOT_FOUND)
+            if not membership.is_temporary:
+                return Response(
+                    {"error": "This team is already permanent for you"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if membership.conversion_deadline and timezone.now() > membership.conversion_deadline:
+                return Response({"error": "Conversion window has expired"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Block conversion if user already has a perm team for this game
+            from accounts.team_helpers import has_permanent_team_for_game
+            if team.game and has_permanent_team_for_game(request.user, team.game):
+                conflict = (
+                    TeamMember.objects.filter(
+                        user=request.user,
+                        is_temporary=False,
+                        team__is_temporary=False,
+                        team__game=team.game,
+                    )
+                    .exclude(team=team)
+                    .select_related("team")
+                    .first()
+                )
+                conflict_team = conflict.team if conflict else None
+                return Response(
+                    {
+                        "error": "conflict",
+                        "conflict_team_id": conflict_team.id if conflict_team else None,
+                        "conflict_team_name": conflict_team.name if conflict_team else None,
+                        "is_captain_of_conflict": bool(conflict_team and conflict_team.captain == request.user),
+                        "message": (
+                            f"You already have a permanent {team.game} team. Leave it first "
+                            f"before keeping this one."
+                        ),
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            membership.is_temporary = False
+            membership.conversion_deadline = None
+            membership.save(update_fields=["is_temporary", "conversion_deadline"])
+
+            # Mark related conversion-offer notifications read
+            from accounts.models import Notification
+            Notification.objects.filter(
+                user=request.user,
+                type="team_conversion_offer",
+                related_id=team.id,
+            ).update(is_read=True)
+
+            return Response(
+                {"success": True, "message": f"Team '{team.name}' is now your permanent team."},
+                status=status.HTTP_200_OK,
+            )
+
+        # ─── Legacy team-level flow (Team.is_temporary=True) ────────────────
         if team.captain != request.user:
             return Response({"error": "Only the captain can convert this team"}, status=status.HTTP_403_FORBIDDEN)
-
-        if not team.is_temporary:
-            return Response({"error": "This team is already permanent"}, status=status.HTTP_400_BAD_REQUEST)
 
         if team.conversion_deadline and timezone.now() > team.conversion_deadline:
             return Response({"error": "Conversion window has expired"}, status=status.HTTP_400_BAD_REQUEST)
 
         # Check if captain already has a permanent team for the same game
         if team.game:
-            from accounts.models import TeamMember
             # Normalize game variants (e.g. "Freefire" vs "Free Fire") for conflict check
             game_variants = [team.game]
             normalized = team.game.lower().replace(' ', '')
@@ -1015,17 +1132,52 @@ class TeamViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"])
     def decline_conversion(self, request, pk=None):
         """
-        Decline the conversion offer and delete the temp team.
+        Decline the conversion offer.
+
+        Per-member temp logic (default for new teams):
+            Removes the *current user's* membership from this team. The team
+            and other members' memberships are unaffected.
+
+        Legacy team-level temp (Team.is_temporary=True):
+            Captain-only. Deletes the whole team.
+
         POST /api/accounts/teams/{id}/decline_conversion/
-        Only the team captain can call this.
         """
         team = self.get_object()
 
+        # ─── Per-member flow (new teams) ────────────────────────────────────
+        if not team.is_temporary:
+            membership = TeamMember.objects.filter(team=team, user=request.user).first()
+            if not membership:
+                return Response({"error": "You are not a member of this team"}, status=status.HTTP_404_NOT_FOUND)
+            if not membership.is_temporary:
+                return Response(
+                    {"error": "This team is not temporary for you — nothing to decline"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Captain leaving via decline is a special case — for v1 we block it
+            # (captain should transfer captaincy or use leave/disband flows).
+            if membership.is_captain:
+                return Response(
+                    {
+                        "error": (
+                            "You are the team captain. Transfer captaincy or disband the team "
+                            "before declining."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            membership.delete()
+            return Response(
+                {"success": True, "message": f"You have left '{team.name}'."},
+                status=status.HTTP_200_OK,
+            )
+
+        # ─── Legacy team-level flow (Team.is_temporary=True) ────────────────
         if team.captain != request.user:
             return Response({"error": "Only the captain can discard this team"}, status=status.HTTP_403_FORBIDDEN)
-
-        if not team.is_temporary:
-            return Response({"error": "This team is not a temporary team"}, status=status.HTTP_400_BAD_REQUEST)
 
         team_name = team.name
         team.delete()
@@ -1187,25 +1339,9 @@ class TeamViewSet(viewsets.ModelViewSet):
                     results.append({"value": value, "status": "success", "message": f"Invite sent to {value}"})
 
                 elif invite_type == "email":
-                    # Check if this email belongs to a player already in a permanent team for the same game
-                    try:
-                        invited_user = User.objects.get(email__iexact=value, user_type="player")
-                        if not team.is_temporary:
-                            existing_team = TeamMember.objects.filter(
-                                user=invited_user,
-                                team__is_temporary=False,
-                                team__game=team.game,
-                            ).select_related("team").first()
-                            if existing_team:
-                                game_label = team.game or "this game"
-                                results.append({
-                                    "value": value,
-                                    "status": "error",
-                                    "message": f"This player is already in a permanent {game_label} team ('{existing_team.team.name}'). They must exit that team before joining a new one.",
-                                })
-                                continue
-                    except User.DoesNotExist:
-                        pass  # Unknown email — allow invite, blocked at join time if needed
+                    # Per per-member temp logic: invites to players who already have a perm team
+                    # for this game are allowed. Their membership in this team will simply be
+                    # marked temporary on accept (with the convert/decline prompt later).
 
                     # Create invite with email — link to reg if temp team has open slot
                     invite_token = str(uuid.uuid4())
@@ -1283,6 +1419,141 @@ class TeamViewSet(viewsets.ModelViewSet):
                 results.append({"value": value, "status": "error", "message": str(e)})
 
         return Response({"results": results}, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["post"], url_path="resend_invite")
+    def resend_invite(self, request, pk=None):
+        """
+        Re-send a pending / declined / expired team invite using the same
+        method (email / phone / username) it was originally sent with.
+
+        Captain-only. Rate-limited to 3 resends per invite per 30-minute window
+        to prevent spamming the invitee.
+
+        POST /api/accounts/teams/<id>/resend_invite/
+        Body: { "invite_id": <int> }
+        """
+        team = self.get_object()
+
+        if team.captain != request.user:
+            return Response(
+                {"error": "Only the captain can resend invites"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        invite_id = request.data.get("invite_id")
+        if not invite_id:
+            return Response({"error": "invite_id is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        invite = team.join_requests.filter(id=invite_id, request_type="invite").first()
+        if not invite:
+            return Response({"error": "Invite not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if invite.status == "accepted":
+            return Response(
+                {"error": "This invite has already been accepted"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Rate limit: max 3 resends per invite per 30-minute window.
+        from django.core.cache import cache
+        cache_key = f"invite_resends:{invite.id}"
+        count = cache.get(cache_key, 0)
+        if count >= 3:
+            ttl = cache.ttl(cache_key) if hasattr(cache, "ttl") else 1800
+            return Response(
+                {
+                    "error": "rate_limited",
+                    "message": (
+                        "You've resent this invite 3 times recently. "
+                        "Please wait before sending again."
+                    ),
+                    "retry_after_seconds": ttl if isinstance(ttl, int) and ttl > 0 else 1800,
+                },
+                status=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+
+        # Reset status if expired/rejected so the invitee can act on it again,
+        # and always extend expiry by another 7 days.
+        new_expiry = timezone.now() + timezone.timedelta(days=7)
+        update_fields = ["invite_expires_at", "updated_at"]
+        if invite.status in ("rejected", "expired"):
+            invite.status = "pending"
+            update_fields.append("status")
+        invite.invite_expires_at = new_expiry
+        invite.save(update_fields=update_fields)
+
+        # Bump the rate-limit counter
+        cache.set(cache_key, count + 1, timeout=1800)  # 30-minute sliding window
+
+        send_error = None
+        send_label = ""
+
+        try:
+            if invite.invite_type == "email" and invite.invited_email:
+                from scrimverse.email_utils import send_team_invite_email
+                send_team_invite_email(
+                    invited_email=invite.invited_email,
+                    captain_name=request.user.username,
+                    team_name=team.name,
+                    invite_token=invite.invite_token,
+                    expires_at=new_expiry.strftime("%B %d, %Y"),
+                )
+                send_label = f"Email re-sent to {invite.invited_email}"
+
+            elif invite.invite_type == "phone" and invite.phone_number:
+                from scrimverse.sms_utils import send_team_invite_sms
+                send_team_invite_sms(
+                    phone_number=invite.phone_number,
+                    captain_name=request.user.username,
+                    team_name=team.name,
+                    invite_token=invite.invite_token,
+                )
+                send_label = f"SMS re-sent to {invite.phone_number}"
+
+            elif invite.invite_type == "username" and invite.player:
+                from accounts.models import Notification
+                if should_notify(invite.player, "teamInvites"):
+                    Notification.objects.create(
+                        user=invite.player,
+                        type="team_invite",
+                        title=f"Team Invite from {team.name}",
+                        message=(
+                            f"{request.user.username} has invited you to join "
+                            f"team '{team.name}'."
+                        ),
+                        related_id=team.id,
+                        related_type="team",
+                    )
+                send_label = f"Notification re-sent to @{invite.player.username}"
+
+            else:
+                send_error = "Unsupported invite type for resend"
+
+        except Exception as exc:  # pragma: no cover — third-party failure
+            logger.error(f"Failed to resend invite {invite.id}: {exc}")
+            send_error = "Failed to send invite — please try again"
+
+        if send_error:
+            # Roll back the counter so a real failure doesn't burn a try
+            cache.set(cache_key, count, timeout=1800)
+            return Response(
+                {"error": send_error},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        return Response(
+            {
+                "success": True,
+                "message": send_label,
+                "invite": {
+                    "id": invite.id,
+                    "status": invite.status,
+                    "expires_at": invite.invite_expires_at,
+                },
+                "resends_remaining": max(0, 3 - (count + 1)),
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 # ============================================================================
@@ -1483,11 +1754,27 @@ class AcceptInviteView(APIView):
 
             # 2. Add user to team (check if already exists to avoid duplicates)
             team = invite.team
+
+            # Determine if this membership should be temporary (i.e. this user
+            # already has a perm team for the same game)
+            from accounts.team_helpers import determine_member_temp_status
+            tournament_for_deadline = (
+                invite.tournament_registration.tournament if invite.tournament_registration_id else None
+            )
+            member_temp, member_deadline = determine_member_temp_status(
+                user, team.game, tournament_for_deadline
+            )
+
             # First check if user is already in team by user field
             existing_member = TeamMember.objects.filter(team=team, user=user).first()
             if existing_member:
                 # User already exists as team member, don't create duplicate
                 team_member = existing_member
+                # Update per-member temp status if needed
+                if existing_member.is_temporary != member_temp:
+                    existing_member.is_temporary = member_temp
+                    existing_member.conversion_deadline = member_deadline
+                    existing_member.save(update_fields=['is_temporary', 'conversion_deadline'])
                 logger.info(f"User {user.username} already exists in team {team.name}, not duplicating")
             else:
                 # Check if exists by username only (in case user field wasn't set initially)
@@ -1495,7 +1782,9 @@ class AcceptInviteView(APIView):
                 if existing_by_username:
                     # Update the user field on existing entry
                     existing_by_username.user = user
-                    existing_by_username.save(update_fields=['user'])
+                    existing_by_username.is_temporary = member_temp
+                    existing_by_username.conversion_deadline = member_deadline
+                    existing_by_username.save(update_fields=['user', 'is_temporary', 'conversion_deadline'])
                     team_member = existing_by_username
                     logger.info(f"Updated user field for {user.username} in team {team.name}")
                 else:
@@ -1505,6 +1794,8 @@ class AcceptInviteView(APIView):
                         user=user,
                         username=user.username,
                         is_captain=False,
+                        is_temporary=member_temp,
+                        conversion_deadline=member_deadline,
                     )
                     logger.info(f"Created new team member for {user.username} in team {team.name}")
 

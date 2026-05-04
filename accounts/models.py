@@ -295,6 +295,15 @@ class TeamMember(models.Model):
     username = models.CharField(max_length=100)
     is_captain = models.BooleanField(default=False)
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='Member', blank=True)
+    is_temporary = models.BooleanField(
+        default=False,
+        help_text="True if this membership is temporary for the current user — set when they joined this team "
+                  "while already having a permanent team for the same game. They get the convert/decline prompt."
+    )
+    conversion_deadline = models.DateTimeField(
+        null=True, blank=True,
+        help_text="48h window for this member to keep this team permanently (only set when is_temporary=True)"
+    )
 
     def __str__(self):
         return f"{self.username} in {self.team.name}"

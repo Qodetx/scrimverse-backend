@@ -3,6 +3,7 @@
 from tournaments.serializers.tournament import (  # noqa: F401
     TournamentSerializer,
     TournamentListSerializer,
+    TournamentSponsorSerializer,
 )
 
 from tournaments.serializers.registration import (  # noqa: F401

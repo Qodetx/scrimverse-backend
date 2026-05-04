@@ -2,7 +2,11 @@
 Group and round management views.
 Handles round configuration, group listing, and round results.
 """
+import csv
 import logging
+import re
+
+from django.http import StreamingHttpResponse
 
 from rest_framework import generics, permissions
 from rest_framework.permissions import IsAuthenticated
@@ -508,6 +512,111 @@ class RoundGroupsListView(generics.GenericAPIView):
             )
 
         return Response({"round_number": round_number, "groups": groups_data})
+
+
+class _Echo:
+    """Tiny file-like for streaming CSV row by row without buffering."""
+
+    def write(self, value):
+        return value
+
+
+class RoundSlotListExportView(generics.GenericAPIView):
+    """
+    Export the slot list for a round as a downloadable CSV.
+
+    Returns one row per team with: slot_number, group_name, team_name,
+    captain_username, players (comma-joined within the cell). Players see
+    the same data they get on the slot list page; hosts see all groups.
+
+    GET /api/tournaments/<tournament_id>/rounds/<round_number>/slots/export/
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, tournament_id, round_number):
+        # Reuse the same access logic as RoundGroupsListView so we never leak
+        # data here that wouldn't show up on the player's slot list page.
+        is_host = False
+        player_registration = None
+
+        try:
+            host_profile = HostProfile.objects.get(user=request.user)
+            tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
+            is_host = True
+        except (HostProfile.DoesNotExist, Tournament.DoesNotExist):
+            try:
+                player_profile = PlayerProfile.objects.get(user=request.user)
+                tournament = Tournament.objects.get(id=tournament_id)
+                player_registration = TournamentRegistration.objects.filter(
+                    tournament=tournament, player=player_profile
+                ).first()
+                if not player_registration:
+                    team_ids = TeamMember.objects.filter(user=request.user).values_list(
+                        "team_id", flat=True
+                    )
+                    player_registration = TournamentRegistration.objects.filter(
+                        tournament=tournament, team_id__in=team_ids
+                    ).first()
+                if not player_registration:
+                    return Response(
+                        {"error": "You are not registered for this tournament"}, status=403
+                    )
+            except (PlayerProfile.DoesNotExist, Tournament.DoesNotExist):
+                return Response(
+                    {"error": "Tournament not found or you don't have access"}, status=404
+                )
+
+        is_scrim = tournament.event_mode == "SCRIM"
+        is_completed = tournament.status == "completed"
+        if is_host or is_scrim or is_completed:
+            groups = Group.objects.filter(tournament=tournament, round_number=round_number)
+        else:
+            groups = Group.objects.filter(
+                tournament=tournament, round_number=round_number, teams=player_registration
+            )
+
+        if not groups.exists():
+            return Response({"error": f"No slots found for round {round_number}"}, status=404)
+
+        # Slot numbers run continuously across all groups so the export matches
+        # what the slot list page shows.
+        rows = [["slot_number", "group_name", "team_name", "captain_username", "players"]]
+        slot_counter = 1
+        for group in groups.order_by("group_name"):
+            for team_reg in group.teams.all().order_by("id"):
+                captain_username = team_reg.player.user.username if team_reg.player else ""
+                player_names = []
+                team_obj = team_reg.team
+                if team_obj:
+                    player_names = list(
+                        team_obj.members.values_list("username", flat=True)
+                    )
+                rows.append(
+                    [
+                        slot_counter,
+                        group.group_name,
+                        team_reg.team_name or "",
+                        captain_username,
+                        ", ".join(p for p in player_names if p),
+                    ]
+                )
+                slot_counter += 1
+
+        # Slugify the tournament title so the downloaded filename is friendly
+        # (browser will use it via Content-Disposition).
+        slug = re.sub(r"[^a-zA-Z0-9]+", "-", (tournament.title or "tournament")).strip("-").lower()
+        filename = f"{slug or 'tournament'}-round-{round_number}-slots.csv"
+
+        writer = csv.writer(_Echo())
+
+        def stream_rows():
+            for row in rows:
+                yield writer.writerow(row)
+
+        response = StreamingHttpResponse(stream_rows(), content_type="text/csv")
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
 
 
 class RoundResultsView(generics.GenericAPIView):

@@ -56,17 +56,23 @@ def test_create_team_with_members(authenticated_client, player_user, test_player
 
 @pytest.mark.django_db
 def test_create_team_when_already_in_team_fails(authenticated_client, player_user):
-    """Test player cannot create team if already in a permanent team"""
-    # Create first team
-    team1 = Team.objects.create(name="First Team", captain=player_user, is_temporary=False)
-    TeamMember.objects.create(team=team1, user=player_user, username=player_user.username, is_captain=True)
+    """
+    Test player cannot create a second permanent team for the SAME game.
+    Per-game perm rule: one permanent team per game per player.
+    """
+    # Create first BGMI team
+    team1 = Team.objects.create(name="First Team", captain=player_user, is_temporary=False, game="BGMI")
+    TeamMember.objects.create(
+        team=team1, user=player_user, username=player_user.username,
+        is_captain=True, is_temporary=False,
+    )
 
-    # Try to create second team
-    data = {"name": "Second Team", "description": "Should fail"}
+    # Try to create second BGMI team — should be blocked
+    data = {"name": "Second Team", "game": "BGMI", "description": "Should fail"}
     response = authenticated_client.post("/api/accounts/teams/", data, format="json")
 
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert "already a member" in str(response.data).lower()
+    assert "permanent" in str(response.data).lower()
 
 
 @pytest.mark.django_db

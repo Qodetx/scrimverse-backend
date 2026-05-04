@@ -59,18 +59,30 @@ def process_successful_registration(registration, merchant_order_id):
             if attempt > 5:
                 break  # safety valve
 
+        # Determine if captain's membership should be temporary (i.e. they
+        # already have a perm team for this game)
+        from accounts.team_helpers import determine_member_temp_status
+        tournament_game = registration.tournament.game_name
+        captain_temp, captain_deadline = determine_member_temp_status(
+            registration.player.user, tournament_game, registration.tournament
+        )
+
         team = Team.objects.create(
             name=team_name,
             captain=registration.player.user,
             is_temporary=False,
+            game=tournament_game,
+            linked_tournament=registration.tournament,
         )
 
-        # Add captain as a team member
+        # Add captain as a team member (with per-member temp flag)
         TeamMember.objects.create(
             team=team,
             user=registration.player.user,
             username=registration.player.user.username,
             is_captain=True,
+            is_temporary=captain_temp,
+            conversion_deadline=captain_deadline,
         )
 
         # Link team to registration

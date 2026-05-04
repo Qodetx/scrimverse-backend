@@ -554,3 +554,24 @@ class HostRating(models.Model):
     class Meta:
         db_table = "host_ratings"
         ordering = ["-created_at"]
+
+
+class TournamentSponsor(models.Model):
+    """
+    Sponsors for a tournament. Hosts add these from the manage page.
+    sponsor_type is free-text (e.g. "Title Sponsor", "Food Partner").
+    """
+
+    tournament = models.ForeignKey(Tournament, on_delete=models.CASCADE, related_name="sponsors")
+    name = models.CharField(max_length=100)
+    sponsor_type = models.CharField(max_length=100, blank=True, default="")
+    logo = models.ImageField(upload_to="sponsors/", null=True, blank=True)
+    website_url = models.URLField(blank=True, default="")
+    display_order = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = "tournament_sponsors"
+        ordering = ["display_order", "id"]
+
+    def __str__(self):
+        return f"{self.name} – {self.tournament.title}"

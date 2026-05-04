@@ -2,6 +2,8 @@ from django.urls import path
 
 from tournaments.pricing_views import PlanPricingView
 from tournaments.views import (  # Tournament URLs; Registration URLs; Rating URLs; Groups/Matches URLs
+    TournamentSponsorListCreateView,
+    TournamentSponsorDetailView,
     EndRoundView,
     EndTournamentView,
     HostDashboardStatsView,
@@ -34,6 +36,7 @@ from tournaments.views import (  # Tournament URLs; Registration URLs; Rating UR
     ConfigureRoundView,
     RoundGroupsListView,
     RoundResultsView,
+    RoundSlotListExportView,
     StartMatchView,
     EndMatchView,
     UpdateMatchCredentialsView,
@@ -91,6 +94,11 @@ urlpatterns = [
         "<int:tournament_id>/rounds/<int:round_number>/groups/", RoundGroupsListView.as_view(), name="round-groups-list"
     ),
     path("<int:tournament_id>/rounds/<int:round_number>/results/", RoundResultsView.as_view(), name="round-results"),
+    path(
+        "<int:tournament_id>/rounds/<int:round_number>/slots/export/",
+        RoundSlotListExportView.as_view(),
+        name="round-slots-export",
+    ),
     # Match Management (Old Implementation)
     path("<int:tournament_id>/groups/<int:group_id>/matches/start/", StartMatchView.as_view(), name="start-match"),
     path("<int:tournament_id>/matches/<int:match_id>/end/", EndMatchView.as_view(), name="end-match"),
@@ -109,4 +117,8 @@ urlpatterns = [
     # Host Rating
     path("host/<int:host_id>/rate/", HostRatingCreateView.as_view(), name="host-rate"),
     path("host/<int:host_id>/ratings/", HostRatingsListView.as_view(), name="host-ratings"),
+
+    # Sponsors
+    path("<int:tournament_id>/sponsors/", TournamentSponsorListCreateView.as_view(), name="tournament-sponsors"),
+    path("<int:tournament_id>/sponsors/<int:sponsor_id>/", TournamentSponsorDetailView.as_view(), name="tournament-sponsor-detail"),
 ]

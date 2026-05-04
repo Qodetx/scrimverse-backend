@@ -83,22 +83,39 @@ class TournamentRegistrationInitiateView(APIView):
             # Get tournament
             tournament = Tournament.objects.get(id=tournament_id)
 
-            # For free tournaments, create the Team now so registration.team is linked
+            # For free tournaments, create the Team now so registration.team is linked.
+            # Per per-member temp logic: the team itself is created as permanent. Only
+            # members who already had a perm team for this game get a temporary
+            # membership with a 48h convert-or-decline window.
             team = None
             if float(tournament.entry_fee) == 0:
                 from accounts.models import Team as TeamModel, TeamMember as TeamMemberModel
+                from accounts.team_helpers import determine_member_temp_status
+
+                captain_temp, captain_deadline = determine_member_temp_status(
+                    request.user, tournament.game_name, tournament
+                )
+
                 team = TeamModel.objects.create(
                     name=team_name,
                     captain=request.user,
-                    is_temporary=True,
+                    # Team-level flag stays False for new teams; per-member flag is the
+                    # source of truth going forward. Legacy temp teams pre-migration
+                    # are unaffected.
+                    is_temporary=False,
                     linked_tournament=tournament,
-                    game=tournament.game_name
+                    game=tournament.game_name,
                 )
-                # Add captain as a team member
+                # Add captain as a team member (with the right temp flag)
                 TeamMemberModel.objects.get_or_create(
                     team=team,
                     user=request.user,
-                    defaults={'username': request.user.username, 'is_captain': True}
+                    defaults={
+                        'username': request.user.username,
+                        'is_captain': True,
+                        'is_temporary': captain_temp,
+                        'conversion_deadline': captain_deadline,
+                    }
                 )
 
             # Build the initial invited_members_status dict using the mode-appropriate contact keys

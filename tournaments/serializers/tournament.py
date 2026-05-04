@@ -8,7 +8,16 @@ from django.conf import settings
 from rest_framework import serializers
 
 from accounts.serializers import HostProfileSerializer
-from tournaments.models import Tournament
+from tournaments.models import Tournament, TournamentSponsor
+
+
+class TournamentSponsorSerializer(serializers.ModelSerializer):
+    logo = serializers.ImageField(max_length=None, use_url=True, required=False, allow_null=True)
+    website_url = serializers.URLField(required=False, allow_blank=True, default="")
+
+    class Meta:
+        model = TournamentSponsor
+        fields = ("id", "name", "sponsor_type", "logo", "website_url", "display_order")
 
 
 class TournamentSerializer(serializers.ModelSerializer):
@@ -143,8 +152,12 @@ class TournamentSerializer(serializers.ModelSerializer):
         return attrs
 
     def to_representation(self, instance):
-        """Custom representation to ensure default banner fallback and proper tournament_file handling"""
+        """Custom representation to ensure default banner fallback, tournament_file handling, and sponsors"""
         data = super().to_representation(instance)
+
+        # Attach sponsors
+        sponsors = instance.sponsors.all().order_by("display_order", "id")
+        data["sponsors"] = TournamentSponsorSerializer(sponsors, many=True, context=self.context).data
 
         # Check if banner_image is null in the model instance
         if not instance.banner_image:
