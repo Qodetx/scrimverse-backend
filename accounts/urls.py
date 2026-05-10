@@ -15,6 +15,7 @@ from accounts.analytics_views import (
     PlayerAnalyticsTrendView,
     PlayerAnalyticsWeeklyActivityView,
     PlayerAnalyticsWeeklyTrendView,
+    PlayerTeamAnalyticsView,
 )
 from accounts.leaderboard_views import LeaderboardView, TeamRankView
 from accounts.notification_views import (
@@ -101,6 +102,7 @@ urlpatterns = [
     path("players/analytics/weekly-activity/", PlayerAnalyticsWeeklyActivityView.as_view(), name="player-analytics-weekly-activity"),
     path("players/analytics/weekly-trend/", PlayerAnalyticsWeeklyTrendView.as_view(), name="player-analytics-weekly-trend"),
     path("players/analytics/recent-results/", PlayerAnalyticsRecentResultsView.as_view(), name="player-analytics-recent-results"),
+    path("players/analytics/team-stats/", PlayerTeamAnalyticsView.as_view(), name="player-analytics-team-stats"),
     # Leaderboard
     path("leaderboard/", LeaderboardView.as_view(), name="leaderboard"),
     path("teams/<int:team_id>/rank/", TeamRankView.as_view(), name="team-rank"),

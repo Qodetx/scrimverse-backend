@@ -1555,6 +1555,35 @@ class TeamViewSet(viewsets.ModelViewSet):
             status=status.HTTP_200_OK,
         )
 
+    @action(detail=True, methods=["delete"], url_path=r"cancel_invite/(?P<invite_id>[0-9]+)")
+    def cancel_invite(self, request, pk=None, invite_id=None):
+        """
+        Cancel (delete) a pending/rejected/expired team invite.
+        Used by the captain to fix a wrong email/phone before resending.
+
+        DELETE /api/accounts/teams/<id>/cancel_invite/<invite_id>/
+        """
+        team = self.get_object()
+
+        if team.captain != request.user:
+            return Response(
+                {"error": "Only the captain can cancel invites"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        invite = team.join_requests.filter(id=invite_id, request_type="invite").first()
+        if not invite:
+            return Response({"error": "Invite not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if invite.status == "accepted":
+            return Response(
+                {"error": "Cannot cancel an accepted invite"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        invite.delete()
+        return Response({"message": "Invite cancelled"}, status=status.HTTP_200_OK)
+
 
 # ============================================================================
 # TEAM INVITE ENDPOINTS (Invite-Based Registration Flow)
@@ -1875,12 +1904,28 @@ class AcceptInviteView(APIView):
                     f"Registration {registration.id} updated: {match_key} accepted by {user.username}"
                 )
 
+        # Compute team size and joined count for the registration confirmation modal
+        _mode_map = {'5v5': 5, 'Squad': 4, 'Duo': 2, 'Solo': 1}
+        team_size = 0
+        joined_count = 0
+        reg = invite.tournament_registration
+        if reg and reg.tournament:
+            game_mode = getattr(reg.tournament, 'game_mode', None)
+            team_size = _mode_map.get(game_mode, 0) if game_mode else 0
+        if reg and reg.invited_members_status:
+            joined_count = sum(
+                1 for v in reg.invited_members_status.values() if v.get('status') == 'accepted'
+            ) + 1  # +1 for captain
+
         return Response(
             {
                 "success": True,
                 "message": f"Successfully accepted invite and joined {team.name}!",
                 "team_id": team.id,
                 "team_name": team.name,
+                "captain_name": team.captain.username if team.captain else "",
+                "team_size": team_size,
+                "joined_count": joined_count,
             },
             status=status.HTTP_200_OK,
         )

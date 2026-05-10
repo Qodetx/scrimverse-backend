@@ -11,6 +11,7 @@ urlpatterns = [
     path("api/accounts/", include("accounts.urls")),
     path("api/tournaments/", include("tournaments.urls")),
     path("api/payments/", include("payments.urls")),
+    path("api/community/", include("community.urls")),
 ]
 
 # Serve media files in development

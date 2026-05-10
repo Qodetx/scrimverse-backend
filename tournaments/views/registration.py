@@ -342,7 +342,7 @@ class TournamentRegistrationInitiateView(APIView):
                     # Queue invite emails only for email-mode invites
                     if invited_partners and invite_mode == 'email':
                         try:
-                            send_team_invite_emails_task.delay(registration_id=registration.id)
+                            send_team_invite_emails_task.delay(registration.team.id)
                         except Exception as e:
                             logger.error(f'Failed to queue invite emails for registration {registration.id}: {e}')
 

@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     "tournaments",
     "payments",
     "communications",
+    "community",
 ]
 
 MIDDLEWARE = [

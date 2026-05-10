@@ -48,19 +48,21 @@ def send_team_invite_emails_task(team_id):
         frontend_url = settings.CORS_ALLOWED_ORIGINS[0]
 
         for join_request in pending_requests:
+            recipient = join_request.invited_email or join_request.phone_number or ''
+            if not recipient:
+                continue
             try:
-                invite_url = f"{frontend_url}/teams/invite/{join_request.invite_token}"
                 send_team_invite_email(
-                    invitee_email=join_request.invitee_email,
-                    invitee_name=join_request.invitee_name or join_request.invitee_email.split("@")[0],
-                    team_name=team.name,
+                    invited_email=recipient,
                     captain_name=team.captain.username,
-                    invite_url=invite_url,
+                    team_name=team.name,
+                    invite_token=join_request.invite_token or '',
+                    expires_at=join_request.invite_expires_at.strftime('%B %d, %Y') if join_request.invite_expires_at else '',
                 )
                 emails_sent += 1
-                logger.info(f"Team invite email sent to {join_request.invitee_email}")
+                logger.info(f"Team invite email sent to {recipient}")
             except Exception as e:
-                logger.error(f"Failed to send invite email to {join_request.invitee_email}: {e}")
+                logger.error(f"Failed to send invite email to {recipient}: {e}")
 
         logger.info(f"Sent {emails_sent} team invite emails for team {team_id}")
         return {"emails_sent": emails_sent, "team_id": team_id}

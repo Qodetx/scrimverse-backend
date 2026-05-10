@@ -219,6 +219,7 @@ class TournamentListSerializer(serializers.ModelSerializer):
             "round_names",
             "credential_release_time",
             "slot_list_release_time",
+            "live_link",
         )
 
     def get_is_registered(self, obj):
