@@ -726,7 +726,25 @@ class TeamViewSet(viewsets.ModelViewSet):
                         break
                 registration.save(update_fields=['invited_members_status', 'updated_at'])
 
-            return Response({"message": "Invitation accepted"}, status=status.HTTP_200_OK)
+            # Build response with team info for frontend Registration Confirmed modal
+            joined_count = TeamMember.objects.filter(team=team, is_captain=False).count() + 1
+            tournament_name = ""
+            team_size = 0
+            if invite.tournament_registration:
+                reg = invite.tournament_registration
+                tournament_name = reg.tournament.title if reg.tournament else ""
+                # team_size = total invited members + captain
+                members_list = reg.team_members or []
+                team_size = len(members_list) if members_list else (team.members.count() + 1)
+            return Response({
+                "message": "Invitation accepted",
+                "team_name": team.name,
+                "team_id": team.id,
+                "captain_name": team.captain.username if team.captain else "",
+                "tournament_name": tournament_name,
+                "team_size": team_size,
+                "joined_count": joined_count,
+            }, status=status.HTTP_200_OK)
         else:
             invite.status = "rejected"
             invite.save()

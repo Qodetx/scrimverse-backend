@@ -1,11 +1,110 @@
 import csv
 
 from django.contrib import admin
-from django.db.models import Q
 from django.http import HttpResponse
+from django.urls import path
 from django.utils.html import format_html
 
 from .models import CommunityJoin, CommunitySettings
+
+
+def _build_csv_response(filename, header, rows):
+    response = HttpResponse(content_type="text/csv")
+    response["Content-Disposition"] = f'attachment; filename="{filename}"'
+    writer = csv.writer(response)
+    writer.writerow(header)
+    for row in rows:
+        writer.writerow(row)
+    return response
+
+
+def _platform_filter(platform):
+    """Return list of community_type values matching the platform filter."""
+    if platform == "whatsapp":
+        return [CommunityJoin.WHATSAPP]
+    if platform == "instagram":
+        return [CommunityJoin.INSTAGRAM]
+    return [CommunityJoin.WHATSAPP, CommunityJoin.INSTAGRAM]
+
+
+def _export_joiners_csv(platform):
+    """Export all users who clicked any of the platform's community button(s)."""
+    types = _platform_filter(platform)
+    qs = (
+        CommunityJoin.objects.filter(community_type__in=types)
+        .select_related("user")
+        .order_by("-joined_at")
+    )
+    rows = [
+        [
+            j.user.username,
+            j.user.email,
+            j.user.phone_number or "",
+            j.get_community_type_display(),
+            j.joined_at.strftime("%Y-%m-%d %H:%M"),
+        ]
+        for j in qs
+    ]
+    return _build_csv_response(
+        f"community_joiners_{platform}.csv",
+        ["Username", "Email", "Phone Number", "Platform", "Joined At"],
+        rows,
+    )
+
+
+def _export_non_joiners_csv(platform):
+    """Export registered tournament players who have NOT clicked the given community button(s).
+
+    For "all", returns users who haven't joined EITHER platform.
+    """
+    from accounts.models import User
+    from tournaments.models import TournamentRegistration
+
+    types = _platform_filter(platform)
+    registered_user_ids = (
+        TournamentRegistration.objects.filter(status="confirmed")
+        .values_list("player__user_id", flat=True)
+        .distinct()
+    )
+    # User is excluded only if they've joined ALL the selected platforms
+    if platform == "all":
+        joined_wa = set(
+            CommunityJoin.objects.filter(community_type=CommunityJoin.WHATSAPP)
+            .values_list("user_id", flat=True)
+        )
+        joined_ig = set(
+            CommunityJoin.objects.filter(community_type=CommunityJoin.INSTAGRAM)
+            .values_list("user_id", flat=True)
+        )
+        # Non-joiners of "all" = haven't joined either
+        excluded = joined_wa & joined_ig
+    else:
+        excluded = set(
+            CommunityJoin.objects.filter(community_type__in=types)
+            .values_list("user_id", flat=True)
+        )
+
+    non_joiners = (
+        User.objects.filter(id__in=registered_user_ids)
+        .exclude(id__in=excluded)
+        .order_by("username")
+    )
+    rows = []
+    for user in non_joiners:
+        tournament_count = TournamentRegistration.objects.filter(
+            player__user=user, status="confirmed"
+        ).count()
+        rows.append([
+            user.username,
+            user.email,
+            user.phone_number or "",
+            tournament_count,
+        ])
+    return _build_csv_response(
+        f"community_non_joiners_{platform}.csv",
+        ["Username", "Email", "Phone Number", "Confirmed Tournaments"],
+        rows,
+    )
 
 
 @admin.register(CommunitySettings)
@@ -42,64 +141,42 @@ class CommunitySettingsAdmin(admin.ModelAdmin):
         return redirect(f"/admin/community/communitysettings/{obj.pk}/change/")
 
 
-def export_whatsapp_nonjoiner_csv(modeladmin, request, queryset):
-    """
-    Export CSV of all registered tournament players who have NOT clicked WhatsApp.
-    Ignores the queryset selection — always exports the full non-joiner list.
-    """
-    from accounts.models import User
-    from tournaments.models import TournamentRegistration
-
-    # All users with at least one confirmed registration
-    registered_user_ids = (
-        TournamentRegistration.objects.filter(status="confirmed")
-        .values_list("player__user_id", flat=True)
-        .distinct()
-    )
-
-    # Users who have already joined WhatsApp
-    joined_user_ids = CommunityJoin.objects.filter(
-        community_type=CommunityJoin.WHATSAPP
-    ).values_list("user_id", flat=True)
-
-    # Non-joiners = registered but haven't clicked WhatsApp
-    non_joiners = User.objects.filter(
-        id__in=registered_user_ids
-    ).exclude(
-        id__in=joined_user_ids
-    ).order_by("username")
-
-    response = HttpResponse(content_type="text/csv")
-    response["Content-Disposition"] = 'attachment; filename="whatsapp_non_joiners.csv"'
-
-    writer = csv.writer(response)
-    writer.writerow(["Username", "Email", "Phone Number", "Confirmed Tournaments"])
-
-    for user in non_joiners:
-        tournament_count = TournamentRegistration.objects.filter(
-            player__user=user, status="confirmed"
-        ).count()
-        writer.writerow([
-            user.username,
-            user.email,
-            user.phone_number or "",
-            tournament_count,
-        ])
-
-    return response
-
-
-export_whatsapp_nonjoiner_csv.short_description = "Export WhatsApp non-joiners as CSV"
-
-
 @admin.register(CommunityJoin)
 class CommunityJoinAdmin(admin.ModelAdmin):
     list_display = ("user_username", "user_email", "user_phone", "community_type_badge", "joined_at")
     list_filter = ("community_type", "joined_at")
     search_fields = ("user__username", "user__email", "user__phone_number")
     readonly_fields = ("user", "community_type", "joined_at")
-    actions = [export_whatsapp_nonjoiner_csv]
     ordering = ["-joined_at"]
+    change_list_template = "admin/community/communityjoin/change_list.html"
+
+    def get_urls(self):
+        urls = super().get_urls()
+        custom = [
+            path(
+                "export-csv/",
+                self.admin_site.admin_view(self.export_csv_view),
+                name="community_communityjoin_export_csv",
+            ),
+        ]
+        return custom + urls
+
+    def export_csv_view(self, request):
+        # Single dropdown with 4 options:
+        #   non_joiners  — registered players who haven't joined any community
+        #   whatsapp     — users who clicked WhatsApp
+        #   instagram    — users who clicked Instagram
+        #   all_joiners  — users who clicked either WhatsApp or Instagram
+        export_type = request.GET.get("type", "")
+        if export_type == "non_joiners":
+            return _export_non_joiners_csv("all")
+        if export_type == "whatsapp":
+            return _export_joiners_csv("whatsapp")
+        if export_type == "instagram":
+            return _export_joiners_csv("instagram")
+        if export_type == "all_joiners":
+            return _export_joiners_csv("all")
+        return HttpResponse("Invalid export type", status=400)
 
     def has_add_permission(self, request):
         return False

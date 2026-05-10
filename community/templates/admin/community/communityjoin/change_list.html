@@ -1,0 +1,37 @@
+{% extends "admin/change_list.html" %}
+{% load admin_urls %}
+
+{% block content_title %}
+  {{ block.super }}
+  <div style="background:#f5f5f5;border:1px solid #ddd;border-radius:4px;padding:12px 14px;margin:14px 0;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+    <strong style="font-size:13px;">Export CSV:</strong>
+    <select id="cj-export-type" style="padding:5px 8px;font-size:13px;min-width:280px;">
+      <option value="">— Choose what to export —</option>
+      <option value="non_joiners">Non-Joiners (registered but joined no community)</option>
+      <option value="whatsapp">WhatsApp Joiners</option>
+      <option value="instagram">Instagram Joiners</option>
+      <option value="all_joiners">All Joiners (WhatsApp or Instagram)</option>
+    </select>
+    <button type="button" id="cj-export-go"
+            style="background:#417690;color:#fff;border:0;padding:6px 14px;border-radius:4px;font-size:13px;font-weight:600;cursor:pointer;">
+      Go
+    </button>
+    <span style="color:#666;font-size:12px;">
+      {% if registered_count is not None %}
+        {{ joined_wa_count }}/{{ registered_count }} WA · {{ non_joiner_count }} non-joiners
+      {% endif %}
+    </span>
+  </div>
+  <script>
+    (function () {
+      var btn = document.getElementById('cj-export-go');
+      var typeSel = document.getElementById('cj-export-type');
+      if (!btn) return;
+      btn.addEventListener('click', function () {
+        var t = typeSel.value;
+        if (!t) { alert('Pick what to export'); return; }
+        window.location.href = './export-csv/?type=' + encodeURIComponent(t);
+      });
+    })();
+  </script>
+{% endblock %}
