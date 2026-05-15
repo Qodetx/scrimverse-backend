@@ -668,6 +668,22 @@ class TournamentRegistrationCreateView(generics.CreateAPIView):
                                     tournament_url=f"{config('CORS_ALLOWED_ORIGINS', default='http://localhost:3000').split(',')[0]}/tournaments/{tournament.id}",  # noqa: E501
                                     team_name=registration.team_name,
                                 )
+                                # Flow B: in-app notification so non-captain sees
+                                # RegistrationConfirmationModal on next login
+                                from accounts.models import Notification
+                                Notification.objects.get_or_create(
+                                    user=member_user,
+                                    type='registration_confirmed',
+                                    related_id=registration.id,
+                                    defaults={
+                                        'title': 'Registration Confirmed!',
+                                        'message': (
+                                            f'Your team "{registration.team_name}" is registered '
+                                            f'for "{tournament.title}".'
+                                        ),
+                                        'related_type': 'registration',
+                                    },
+                                )
                             except User.DoesNotExist:
                                 continue
                 logger.info("Tournament registration email tasks queued for captain and team members")

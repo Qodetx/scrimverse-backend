@@ -1472,8 +1472,25 @@ class TeamViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Rate limit: max 3 resends per invite per 30-minute window.
+        # 5-minute cooldown between individual resends
         from django.core.cache import cache
+        cooldown_key = f"invite_cooldown:{invite.id}"
+        last_sent_at = cache.get(cooldown_key)
+        if last_sent_at:
+            elapsed = (timezone.now() - last_sent_at).total_seconds()
+            remaining = int(300 - elapsed)
+            if remaining > 0:
+                mins, secs = divmod(remaining, 60)
+                return Response(
+                    {
+                        "error": "cooldown",
+                        "message": f"Please wait {mins}m {secs}s before resending this invite.",
+                        "retry_after_seconds": remaining,
+                    },
+                    status=status.HTTP_429_TOO_MANY_REQUESTS,
+                )
+
+        # Rate limit: max 3 resends per invite per 30-minute window.
         cache_key = f"invite_resends:{invite.id}"
         count = cache.get(cache_key, 0)
         if count >= 3:
@@ -1558,6 +1575,9 @@ class TeamViewSet(viewsets.ModelViewSet):
                 {"error": send_error},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
+
+        # Record timestamp for 5-minute per-resend cooldown
+        cache.set(cooldown_key, timezone.now(), timeout=300)
 
         return Response(
             {

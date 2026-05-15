@@ -6,7 +6,7 @@ from django.db.models import Avg, Q, Sum
 
 from rest_framework import serializers
 
-from accounts.models import HostProfile, PlayerProfile, Team, TeamJoinRequest, TeamMember
+from accounts.models import HostProfile, PlayerProfile, Team, TeamJoinRequest, TeamMember, TeamStatistics
 from accounts.serializers.user import UserSerializer
 from accounts.tasks import update_host_rating_cache
 from tournaments.models import HostRating, Tournament, TournamentRegistration
@@ -22,6 +22,8 @@ class PlayerProfileSerializer(serializers.ModelSerializer):
     tournament_rank = serializers.SerializerMethodField()
     scrim_rank = serializers.SerializerMethodField()
     invitation_status = serializers.SerializerMethodField()
+    kills_per_match = serializers.SerializerMethodField()
+    team_ranks = serializers.SerializerMethodField()
 
     class Meta:
         model = PlayerProfile
@@ -44,6 +46,8 @@ class PlayerProfileSerializer(serializers.ModelSerializer):
             "tournament_rank",
             "scrim_rank",
             "invitation_status",
+            "kills_per_match",
+            "team_ranks",
         )
 
     def get_invitation_status(self, obj):
@@ -211,6 +215,47 @@ class PlayerProfileSerializer(serializers.ModelSerializer):
             except Exception:
                 pass
         return None
+
+
+    def get_kills_per_match(self, obj):
+        """Team-average kills per match across all teams the player has been in."""
+        memberships = TeamMember.objects.filter(user=obj.user).select_related("team")
+        total_kill_pts = 0
+        total_matches = 0
+        for m in memberships:
+            try:
+                agg = m.team.statistics_by_game.exclude(game_name='ALL').aggregate(
+                    kp=Sum('total_kill_points'), mp=Sum('matches_played')
+                )
+                total_kill_pts += agg['kp'] or 0
+                total_matches += agg['mp'] or 0
+            except Exception:
+                continue
+        if total_matches == 0:
+            return 0
+        return round(total_kill_pts / total_matches, 1)
+
+    def get_team_ranks(self, obj):
+        """One rank entry per team per game for all teams the player has been in."""
+        memberships = TeamMember.objects.filter(user=obj.user).select_related("team")
+        result = []
+        seen = set()
+        for m in memberships:
+            try:
+                for ts in m.team.statistics_by_game.exclude(game_name='ALL').exclude(rank=None):
+                    key = (m.team.id, ts.game_name)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    result.append({
+                        'team_id': m.team.id,
+                        'team_name': m.team.name,
+                        'rank': ts.rank,
+                        'game': ts.game_name,
+                    })
+            except Exception:
+                continue
+        return result
 
 
 class HostProfileSerializer(serializers.ModelSerializer):

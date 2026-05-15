@@ -30,6 +30,14 @@ class NotificationListView(APIView):
         offset = int(request.query_params.get("offset", 0))
 
         qs = Notification.objects.filter(user=request.user)
+
+        # Optional filters
+        type_filter = request.query_params.get("type")
+        if type_filter:
+            qs = qs.filter(type=type_filter)
+        unread_filter = request.query_params.get("unread")
+        if unread_filter and unread_filter.lower() in ("1", "true"):
+            qs = qs.filter(is_read=False)
         total = qs.count()
         notifications = qs[offset:offset + limit]
         data = []
