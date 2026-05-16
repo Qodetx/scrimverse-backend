@@ -7,7 +7,7 @@ from django.utils import timezone
 from django.urls import reverse
 from django.http import HttpResponseRedirect
 
-from .models import BroadcastEmail
+from .models import BroadcastEmail, IssueReport
 
 
 class ScrollableCheckboxSelectMultiple(forms.CheckboxSelectMultiple):
@@ -220,4 +220,52 @@ class BroadcastEmailAdmin(admin.ModelAdmin):
             '<span style="color: {}; font-weight: bold;">{}</span>',
             color,
             obj.status.upper(),
+        )
+
+
+@admin.register(IssueReport)
+class IssueReportAdmin(admin.ModelAdmin):
+    list_display = [
+        'title', 'issue_type', 'priority_badge', 'status_badge_issue',
+        'reporter_name', 'anonymous', 'created_at',
+    ]
+    list_filter = ['issue_type', 'priority', 'status', 'anonymous']
+    search_fields = ['title', 'description', 'reporter_name', 'reporter_email']
+    readonly_fields = ['created_at', 'updated_at', 'submitted_by']
+    ordering = ['-created_at']
+    date_hierarchy = 'created_at'
+
+    fieldsets = (
+        ('Report Details', {
+            'fields': ('issue_type', 'priority', 'title', 'description', 'steps_to_reproduce'),
+        }),
+        ('Reporter Info', {
+            'fields': ('reporter_name', 'reporter_email', 'anonymous', 'submitted_by'),
+        }),
+        ('Admin', {
+            'fields': ('status', 'admin_notes', 'created_at', 'updated_at'),
+        }),
+    )
+
+    @admin.display(description='Priority')
+    def priority_badge(self, obj):
+        colors = {'low': '#28a745', 'medium': '#f0a500', 'high': '#dc3545', 'critical': '#8b0000'}
+        return format_html(
+            '<b style="color:{}">{}</b>',
+            colors.get(obj.priority, '#888888'),
+            obj.priority.upper(),
+        )
+
+    @admin.display(description='Status')
+    def status_badge_issue(self, obj):
+        colors = {
+            'open': '#417690',
+            'in_progress': '#f0a500',
+            'resolved': '#28a745',
+            'closed': '#888888',
+        }
+        return format_html(
+            '<b style="color:{}">{}</b>',
+            colors.get(obj.status, '#888888'),
+            obj.get_status_display(),
         )

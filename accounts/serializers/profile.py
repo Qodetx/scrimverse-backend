@@ -242,7 +242,7 @@ class PlayerProfileSerializer(serializers.ModelSerializer):
         seen = set()
         for m in memberships:
             try:
-                for ts in m.team.statistics_by_game.exclude(game_name='ALL').exclude(rank=None):
+                for ts in m.team.statistics_by_game.exclude(game_name='ALL').exclude(rank__in=[None, 0]):
                     key = (m.team.id, ts.game_name)
                     if key in seen:
                         continue

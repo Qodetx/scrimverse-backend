@@ -79,6 +79,11 @@ class Tournament(models.Model):
 
     # Prize Distribution (stored as JSON)
     prize_distribution = models.JSONField(default=dict, blank=True)  # {"1st": 5000, "2nd": 3000, "3rd": 2000}
+    special_awards = models.JSONField(default=list, blank=True)  # [{"name": "Best IGL Award", "amount": 1000}]
+    coupon_distribution = models.JSONField(default=dict, blank=True)
+    # coupon_distribution format:
+    # {"tiers": [{"rank":"1st","coupons":[{"name":"SPINBOT","link":"...","amount":10000},...]},...],
+    #  "special_awards": [{"name":"Best IGL Award","coupons":[...]}]}
 
     # Tournament Schedule
     tournament_date = models.DateField(help_text="Tournament date", null=True, blank=True)

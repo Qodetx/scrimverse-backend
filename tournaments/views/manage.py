@@ -488,6 +488,8 @@ class UpdateTournamentFieldsView(generics.UpdateAPIView):
             "entry_fee",
             "prize_pool",
             "prize_distribution",
+            "special_awards",
+            "coupon_distribution",
             "placement_points",
             "banner_image",
             "tournament_file",
@@ -509,7 +511,7 @@ class UpdateTournamentFieldsView(generics.UpdateAPIView):
             filtered_data["tournament_file"] = request.FILES["tournament_file"]
 
         # Handle JSON fields
-        for json_field in ("round_names", "rounds", "round_dates", "prize_distribution", "placement_points"):
+        for json_field in ("round_names", "rounds", "round_dates", "prize_distribution", "placement_points", "special_awards", "coupon_distribution"):
             if json_field in filtered_data:
                 try:
                     if isinstance(filtered_data[json_field], str):

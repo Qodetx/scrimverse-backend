@@ -88,3 +88,55 @@ class BroadcastEmail(models.Model):
 
     def __str__(self):
         return f"[{self.status.upper()}] {self.subject} ({self.get_recipient_type_display()})"
+
+
+class IssueReport(models.Model):
+    ISSUE_TYPE_CHOICES = [
+        ('bug', 'Bug'),
+        ('payment', 'Payment'),
+        ('account', 'Account'),
+        ('tournament', 'Tournament'),
+        ('team', 'Team'),
+        ('behavior', 'Inappropriate Behavior'),
+        ('other', 'Other'),
+    ]
+    PRIORITY_CHOICES = [
+        ('low', 'Low'),
+        ('medium', 'Medium'),
+        ('high', 'High'),
+        ('critical', 'Critical'),
+    ]
+    STATUS_CHOICES = [
+        ('open', 'Open'),
+        ('in_progress', 'In Progress'),
+        ('resolved', 'Resolved'),
+        ('closed', 'Closed'),
+    ]
+
+    issue_type = models.CharField(max_length=20, choices=ISSUE_TYPE_CHOICES, default='other')
+    priority = models.CharField(max_length=10, choices=PRIORITY_CHOICES, default='medium')
+    title = models.CharField(max_length=200)
+    description = models.TextField()
+    steps_to_reproduce = models.TextField(blank=True)
+    reporter_name = models.CharField(max_length=100, blank=True)
+    reporter_email = models.EmailField(blank=True)
+    anonymous = models.BooleanField(default=False)
+    submitted_by = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='issue_reports',
+    )
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='open')
+    admin_notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = 'Issue Report'
+        verbose_name_plural = 'Issue Reports'
+
+    def __str__(self):
+        return f"[{self.priority.upper()}] {self.title} ({self.status})"

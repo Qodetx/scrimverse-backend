@@ -25,6 +25,7 @@ from accounts.notification_views import (
     NotificationDeleteView,
     NotificationBulkActionView,
 )
+from accounts.contact_views import ContactFormView, ReportIssueView
 from accounts.password_reset_views import RequestPasswordResetView, ResetPasswordView, VerifyResetTokenView
 from accounts.views import (
     ChangePasswordView,
@@ -116,6 +117,9 @@ urlpatterns = [
     path("notifications/bulk/", NotificationBulkActionView.as_view(), name="notifications-bulk"),
     path("notifications/<int:pk>/", NotificationDeleteView.as_view(), name="notification-delete"),
     path("notifications/<int:pk>/read/", NotificationMarkReadView.as_view(), name="notification-mark-read"),
+    # Contact & Report
+    path("contact/", ContactFormView.as_view(), name="contact-form"),
+    path("report-issue/", ReportIssueView.as_view(), name="report-issue"),
     # Router URLs (must be last)
     path("", include(router.urls)),
 ]
