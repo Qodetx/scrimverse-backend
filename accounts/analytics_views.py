@@ -77,9 +77,22 @@ class PlayerAnalyticsStatsView(APIView):
                 total_wins += 1
 
         matches_played = aggregates["matches_played"] or 0
-        win_rate = round((total_wins / matches_played) * 100, 1) if matches_played > 0 else 0.0
         avg_kill_points = round(aggregates["avg_kill_points"] or 0, 1)
         avg_position_points = round(aggregates["avg_position_points"] or 0, 1)
+        total_tournaments = registrations.count()
+
+        # Match wins: matches where this player's team had the highest total_points in that match
+        match_wins = 0
+        for score in scores_qs.select_related('match'):
+            has_higher = MatchScore.objects.filter(
+                match=score.match,
+                total_points__gt=score.total_points,
+            ).exists()
+            if not has_higher:
+                match_wins += 1
+
+        # Win rate = match wins / matches played (match-level win rate)
+        win_rate = round((match_wins / matches_played) * 100, 1) if matches_played > 0 else 0.0
 
         # Ranking: position of this player's team in their most recent tournament group's points table
         # Per flowchart spec: "There is no individual player ranking. Ranking shown = where the team
@@ -125,7 +138,9 @@ class PlayerAnalyticsStatsView(APIView):
         return Response(
             {
                 "total_wins": total_wins,
+                "match_wins": match_wins,
                 "matches_played": matches_played,
+                "total_tournaments": total_tournaments,
                 "win_rate": win_rate,
                 "ranking": ranking,
                 "avg_kill_points": avg_kill_points,
