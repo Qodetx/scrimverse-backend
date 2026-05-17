@@ -72,7 +72,7 @@ class GroupAdmin(admin.ModelAdmin):
         if obj.winner:
             return format_html(
                 '<span style="color: #ffc107; font-weight: bold;">🏆 {}</span>',
-                obj.winner.name
+                obj.winner.team_name or str(obj.winner)
             )
         return format_html('<span style="color: #6c757d;">-</span>')
 
@@ -170,7 +170,7 @@ class MatchAdmin(admin.ModelAdmin):
         if obj.winner:
             return format_html(
                 '<span style="color: #ffc107; font-weight: bold;">🏆 {}</span>',
-                obj.winner.name
+                obj.winner.team_name or str(obj.winner)
             )
         return format_html('<span style="color: #6c757d;">-</span>')
 

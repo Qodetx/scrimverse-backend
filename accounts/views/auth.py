@@ -356,20 +356,12 @@ class GoogleAuthView(APIView):
                 message = "Login successful!"
 
             except User.DoesNotExist:
-                # User doesn't exist
+                # User doesn't exist — auto-create and log them in.
+                # Google has already verified the email so there is no reason
+                # to reject a new user based on whether they clicked Login vs
+                # Sign Up. Both flows result in the same outcome.
 
-                # If this is a login attempt (not signup), return error
-                if not is_signup:
-                    return Response(
-                        {
-                            "error": "account_not_found",
-                            "message": "No account found with this email. Please sign up first.",
-                            "redirect": "signup",
-                        },
-                        status=status.HTTP_404_NOT_FOUND,
-                    )
-
-                # This is a signup - auto-generate username
+                # Auto-generate username
                 raw_username = username or google_user_info.get("given_name") or email.split("@")[0]
                 # sanitize: keep alphanumerics and underscore
                 base = re.sub(r"[^0-9a-zA-Z_]", "", raw_username)[:24] or "player"
