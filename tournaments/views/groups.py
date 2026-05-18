@@ -410,20 +410,16 @@ class RoundGroupsListView(generics.GenericAPIView):
             except (PlayerProfile.DoesNotExist, Tournament.DoesNotExist):
                 return Response({"error": "Tournament not found or you don't have access"}, status=404)
 
-        # Block players from seeing pre-configured (draft) groups — only the host can see them.
-        # Groups configured before the tournament starts are internal setup; players should
-        # only see groups once the tournament is ongoing and the round is active.
-        if not is_host:
-            round_key = str(round_number)
-            round_status_val = tournament.round_status.get(round_key) if tournament.round_status else None
-            if isinstance(round_status_val, dict):
-                round_status_str = round_status_val.get("status", "upcoming")
-            else:
-                round_status_str = round_status_val or "upcoming"
-            if round_status_str == "pre_configured":
-                return Response(
-                    {"error": f"No groups found for round {round_number}. Configure the round first."}, status=404
-                )
+        # Determine if this round is pre-configured (scheduled before tournament starts).
+        # Pre-configured rounds show slot/timing data to players but credentials are stripped
+        # until they are explicitly released by the host.
+        round_key = str(round_number)
+        round_status_val = tournament.round_status.get(round_key) if tournament.round_status else None
+        if isinstance(round_status_val, dict):
+            round_status_str = round_status_val.get("status", "upcoming")
+        else:
+            round_status_str = round_status_val or "upcoming"
+        is_pre_configured = (round_status_str == "pre_configured")
 
         # Hosts see all groups; players only see their own group (CRITICAL security rule)
         # Exception: scrims have no group assignment — all registered players see all groups
@@ -463,8 +459,9 @@ class RoundGroupsListView(generics.GenericAPIView):
                             "id": match.id,
                             "match_number": match.match_number,
                             "status": match.status,
-                            "match_id": match.match_id,
-                            "match_password": match.match_password,
+                            # Strip credentials when round is pre-configured and viewer is a player
+                            "match_id": match.match_id if (is_host or not is_pre_configured) else None,
+                            "match_password": match.match_password if (is_host or not is_pre_configured) else None,
                             "scheduled_date": str(match.scheduled_date) if match.scheduled_date else None,
                             "scheduled_time": str(match.scheduled_time) if match.scheduled_time else None,
                             "map_name": match.map_name or None,
