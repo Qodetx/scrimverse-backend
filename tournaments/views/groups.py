@@ -576,11 +576,11 @@ class RoundSlotListExportView(generics.GenericAPIView):
         if not groups.exists():
             return Response({"error": f"No slots found for round {round_number}"}, status=404)
 
-        # Slot numbers run continuously across all groups so the export matches
-        # what the slot list page shows.
+        # Slot numbers restart at 1 per group — each group plays in its own
+        # room, so slot 1 of Group A and slot 1 of Group B are different rooms.
         rows = [["slot_number", "group_name", "team_name", "captain_username", "players"]]
-        slot_counter = 1
         for group in groups.order_by("group_name"):
+            slot_counter = 1
             for team_reg in group.teams.all().order_by("id"):
                 captain_username = team_reg.player.user.username if team_reg.player else ""
                 player_names = []
