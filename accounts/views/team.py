@@ -1765,6 +1765,11 @@ class AcceptInviteView(APIView):
 
         elif invite.invite_type == 'link':
             # WhatsApp/link invite: open to anyone with the link, just link the user
+            if invite.team.captain == user:
+                return Response(
+                    {"error": "You are the captain of this team and cannot join via your own invite link."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
             invite.player = user
 
         else:
