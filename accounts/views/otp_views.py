@@ -181,6 +181,91 @@ class UpdatePhoneView(APIView):
         )
 
 
+# ── MSG91 Widget helpers ──────────────────────────────────────────────────
+
+def verify_msg91_access_token(access_token):
+    """
+    Verify a MSG91 OTP widget access token server-side.
+    Returns (True, phone_number) on success, (False, error_message) on failure.
+    """
+    import requests as req
+    from django.conf import settings
+    auth_key = getattr(settings, 'MSG91_AUTH_KEY', '')
+    if not auth_key:
+        logger.error("MSG91_AUTH_KEY not configured")
+        return False, "OTP service not configured"
+    try:
+        resp = req.post(
+            'https://control.msg91.com/api/v5/widget/verifyAccessToken',
+            json={'authkey': auth_key, 'access-token': access_token},
+            headers={'Content-Type': 'application/json'},
+            timeout=10,
+        )
+        data = resp.json()
+        if data.get('type') == 'success':
+            # Extract phone from message field — MSG91 returns "91XXXXXXXXXX"
+            raw = data.get('message', '')
+            phone = raw.lstrip('+').lstrip('91') if raw else ''
+            if len(phone) == 10:
+                return True, phone
+            return True, raw
+        logger.warning(f"MSG91 token verify failed: {data}")
+        return False, data.get('message', 'OTP verification failed')
+    except Exception as e:
+        logger.error(f"MSG91 token verify error: {e}")
+        return False, "OTP verification failed. Please try again."
+
+
+class UpdatePhoneMsg91View(APIView):
+    """
+    PATCH /api/accounts/update-phone-msg91/
+    Body: { "phone": "9876543210", "access_token": "<msg91_jwt>" }
+    Verifies MSG91 widget access token then updates user's phone number.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request):
+        phone = request.data.get("phone", "").strip()
+        access_token = request.data.get("access_token", "").strip()
+
+        if not phone or not access_token:
+            return Response(
+                {"error": "phone and access_token are required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        digits = "".join(c for c in phone if c.isdigit())
+        if digits.startswith("91") and len(digits) == 12:
+            digits = digits[2:]
+        if len(digits) != 10:
+            return Response(
+                {"error": "Phone must be a valid 10-digit Indian mobile number"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        ok, result = verify_msg91_access_token(access_token)
+        if not ok:
+            return Response({"error": result}, status=status.HTTP_400_BAD_REQUEST)
+
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        if User.objects.filter(phone_number=digits, is_phone_verified=True).exclude(pk=request.user.pk).exists():
+            return Response(
+                {"error": "This phone number is already registered to another account."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        request.user.phone_number = digits
+        request.user.is_phone_verified = True
+        request.user.save(update_fields=["phone_number", "is_phone_verified"])
+
+        logger.info(f"Phone updated via MSG91 - User: {request.user.id}, Phone: {digits[:6]}****")
+        return Response(
+            {"message": "Phone number updated successfully", "phone_number": digits},
+            status=status.HTTP_200_OK,
+        )
+
+
 # ── Registration OTP (pre-auth, AllowAny) ────────────────────────────────
 
 def _reg_otp_key(phone):

@@ -40,30 +40,41 @@ class PlayerRegistrationView(generics.CreateAPIView):
         email = request.data.get("email")
         phone_number = request.data.get("phone_number", "").strip()
         otp_verified_token = request.data.get("otp_verified_token", "").strip()
+        msg91_access_token = request.data.get("msg91_access_token", "").strip()
         next_url = request.data.get("next", "").strip() or None
 
-        # Validate phone OTP verification token
+        # Validate phone OTP verification — accept either legacy Redis token or MSG91 access token
         if phone_number:
-            from django.core.cache import cache
             digits = "".join(c for c in phone_number if c.isdigit())
             if digits.startswith("91") and len(digits) == 12:
                 digits = digits[2:]
             if digits.startswith("0") and len(digits) == 11:
                 digits = digits[1:]
-            if not otp_verified_token:
+
+            if msg91_access_token:
+                # MSG91 widget verification
+                from accounts.views.otp_views import verify_msg91_access_token
+                ok, result = verify_msg91_access_token(msg91_access_token)
+                if not ok:
+                    return Response(
+                        {"error": f"Phone verification failed: {result}"},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            elif otp_verified_token:
+                # Legacy Redis OTP verification
+                from django.core.cache import cache
+                verified_key = f"otp_verified:reg:{digits}"
+                stored_token = cache.get(verified_key)
+                if not stored_token or stored_token != otp_verified_token:
+                    return Response(
+                        {"error": "Phone verification expired or invalid. Please verify your phone again."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            else:
                 return Response(
                     {"error": "Phone number must be verified via OTP before registration."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            verified_key = f"otp_verified:reg:{digits}"
-            stored_token = cache.get(verified_key)
-            if not stored_token or stored_token != otp_verified_token:
-                return Response(
-                    {"error": "Phone verification expired or invalid. Please verify your phone again."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
-            # Token is valid — will be consumed after successful registration (not here)
-            pass
 
         # Check if user already exists with this email
         if email:
@@ -110,7 +121,7 @@ class PlayerRegistrationView(generics.CreateAPIView):
             user.post_verify_redirect = next_url
             user.save(update_fields=["post_verify_redirect"])
 
-        # Token is valid — consume it now that registration succeeded (one-time use)
+        # Consume legacy Redis token after successful registration (one-time use)
         if phone_number and otp_verified_token:
             from django.core.cache import cache as _cache
             _digits = "".join(c for c in phone_number if c.isdigit())
@@ -124,11 +135,11 @@ class PlayerRegistrationView(generics.CreateAPIView):
         verification_token = secrets.token_urlsafe(32)
         user.email_verification_token = verification_token
         user.email_verification_sent_at = timezone.now()
-        user.is_email_verified = False  # Explicitly set to False
-        user.is_active = False  # Deactivate account until email is verified
+        user.is_email_verified = False
+        user.is_active = False
 
-        # Mark phone as verified if OTP was verified
-        if phone_number and otp_verified_token:
+        # Mark phone as verified if OTP was verified (either method)
+        if phone_number and (otp_verified_token or msg91_access_token):
             user.is_phone_verified = True
 
         user.save(

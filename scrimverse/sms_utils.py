@@ -1,26 +1,94 @@
 """
-AWS SNS SMS utility for sending team invite SMS messages.
-Requires AWS_SNS_ACCESS_KEY_ID, AWS_SNS_SECRET_ACCESS_KEY, AWS_SNS_REGION in settings.
+SMS utility for ScrimVerse.
+Primary provider: MSG91 (reliable India delivery with DLT compliance).
+Fallback: AWS SNS (used if MSG91 not configured or fails).
 """
 import logging
 
 import boto3
+import requests as req
 from botocore.exceptions import ClientError
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
 
+# ── MSG91 ──────────────────────────────────────────────────────────────────
+
+def _send_via_msg91_otp(phone_number, otp_code):
+    """
+    Send OTP via MSG91.
+    phone_number: 10-digit without country code.
+    Returns True on success, False otherwise.
+    """
+    auth_key = getattr(settings, 'MSG91_AUTH_KEY', '')
+    template_id = getattr(settings, 'MSG91_TEMPLATE_ID', '')
+    if not auth_key:
+        return False
+    try:
+        response = req.post(
+            'https://control.msg91.com/api/v5/otp',
+            json={
+                'template_id': template_id,
+                'mobile': f'91{phone_number}',
+                'authkey': auth_key,
+                'otp': otp_code,
+            },
+            timeout=10,
+        )
+        data = response.json()
+        if data.get('type') == 'success':
+            logger.info(f"OTP SMS sent via MSG91 to +91{phone_number}, reqId: {data.get('request_id')}")
+            return True
+        logger.warning(f"MSG91 OTP failed for +91{phone_number}: {data}")
+        return False
+    except Exception as e:
+        logger.error(f"MSG91 OTP error for +91{phone_number}: {e}")
+        return False
+
+
+def _send_via_msg91_sms(phone_number, message):
+    """
+    Send a plain SMS via MSG91 (used for team invites).
+    phone_number: full number with country code e.g. +919876543210
+    Returns True on success, False otherwise.
+    """
+    auth_key = getattr(settings, 'MSG91_AUTH_KEY', '')
+    if not auth_key:
+        return False
+    # Strip leading + for MSG91
+    mobile = phone_number.lstrip('+')
+    try:
+        response = req.post(
+            'https://control.msg91.com/api/v5/flow/',
+            json={
+                'authkey': auth_key,
+                'sender': 'SCRMVS',
+                'mobiles': mobile,
+                'message': message,
+            },
+            timeout=10,
+        )
+        data = response.json()
+        if data.get('type') == 'success':
+            logger.info(f"SMS sent via MSG91 to {phone_number}, reqId: {data.get('request_id')}")
+            return True
+        logger.warning(f"MSG91 SMS failed for {phone_number}: {data}")
+        return False
+    except Exception as e:
+        logger.error(f"MSG91 SMS error for {phone_number}: {e}")
+        return False
+
+
+# ── AWS SNS ────────────────────────────────────────────────────────────────
+
 def get_sns_client():
-    """Create and return an AWS SNS client."""
     access_key = getattr(settings, 'AWS_SNS_ACCESS_KEY_ID', '')
     secret_key = getattr(settings, 'AWS_SNS_SECRET_ACCESS_KEY', '')
-    region = getattr(settings, 'AWS_SNS_REGION', 'ap-south-1')
-
+    region = getattr(settings, 'AWS_SNS_REGION', 'ap-south-2')
     if not access_key or not secret_key:
-        logger.warning("AWS SNS credentials not configured. SMS sending will be skipped.")
+        logger.warning("AWS SNS credentials not configured.")
         return None
-
     return boto3.client(
         'sns',
         aws_access_key_id=access_key,
@@ -29,89 +97,62 @@ def get_sns_client():
     )
 
 
+def _send_via_sns(phone_number_e164, message):
+    """
+    Send SMS via AWS SNS.
+    phone_number_e164: full number with country code e.g. +919876543210
+    Returns True on success, False otherwise.
+    """
+    client = get_sns_client()
+    if not client:
+        return False
+    try:
+        response = client.publish(
+            PhoneNumber=phone_number_e164,
+            Message=message,
+            MessageAttributes={
+                'AWS.SNS.SMS.SenderID': {'DataType': 'String', 'StringValue': 'SCRMVS'},
+                'AWS.SNS.SMS.SMSType': {'DataType': 'String', 'StringValue': 'Transactional'},
+            }
+        )
+        logger.info(f"SMS sent via SNS to {phone_number_e164}, MessageId: {response.get('MessageId')}")
+        return True
+    except ClientError as e:
+        logger.error(f"SNS SMS failed for {phone_number_e164}: {e}")
+        return False
+
+
+# ── Public API ─────────────────────────────────────────────────────────────
+
+def send_otp_sms(phone_number, otp_code):
+    """
+    Send OTP SMS. MSG91 primary, SNS fallback.
+    phone_number: 10-digit without country code.
+    """
+    logger.info(f"OTP for {phone_number}: {otp_code}")
+
+    if _send_via_msg91_otp(phone_number, otp_code):
+        return True
+
+    logger.warning(f"MSG91 failed, falling back to SNS for +91{phone_number}")
+    return _send_via_sns(f"+91{phone_number}",
+                         f"Your ScrimVerse OTP is {otp_code}. Valid for 10 minutes. Do not share.")
+
+
 def send_team_invite_sms(phone_number, captain_name, team_name, invite_token):
     """
-    Send a team invite SMS via AWS SNS.
-
-    Args:
-        phone_number: Phone number with country code (e.g., +919876543210)
-        captain_name: Username of the captain sending the invite
-        team_name: Name of the team
-        invite_token: Unique invite token for the accept link
-
-    Returns:
-        bool: True if SMS was sent successfully, False otherwise
+    Send team invite SMS. MSG91 primary, SNS fallback.
+    phone_number: full number with country code e.g. +919876543210
     """
     frontend_url = settings.CORS_ALLOWED_ORIGINS[0] if settings.CORS_ALLOWED_ORIGINS else "http://localhost:3000"
     accept_link = f"{frontend_url}/join-team/{invite_token}"
-
-    client = get_sns_client()
-    if not client:
-        logger.warning(f"SMS not sent to {phone_number} — AWS SNS not configured. Invite link: {accept_link}")
-        return False
-
     message = (
         f"ScrimVerse: {captain_name} invited you to join team '{team_name}'! "
         f"Accept here: {accept_link}"
     )
 
-    try:
-        response = client.publish(
-            PhoneNumber=phone_number,
-            Message=message,
-            MessageAttributes={
-                'AWS.SNS.SMS.SenderID': {
-                    'DataType': 'String',
-                    'StringValue': 'ScrimVerse'
-                },
-                'AWS.SNS.SMS.SMSType': {
-                    'DataType': 'String',
-                    'StringValue': 'Transactional'
-                }
-            }
-        )
-        logger.info(f"SMS sent to {phone_number}, MessageId: {response.get('MessageId')}")
+    if _send_via_msg91_sms(phone_number, message):
         return True
-    except ClientError as e:
-        logger.error(f"Failed to send SMS to {phone_number}: {e}")
-        return False
 
-
-def send_otp_sms(phone_number, otp_code):
-    """
-    Send an OTP SMS via AWS SNS.
-    phone_number: 10-digit number without country code (e.g. '9876543210')
-    otp_code: 6-digit string
-    Returns True if sent, False otherwise.
-    In dev (SNS not configured): logs OTP to console so developers can test.
-    """
-    # Always log OTP for dev visibility (masked in prod via log level)
-    logger.info(f"OTP for {phone_number}: {otp_code}")
-
-    client = get_sns_client()
-    if not client:
-        logger.warning(f"OTP SMS not sent to {phone_number} — AWS SNS not configured. OTP: {otp_code}")
-        return False
-
-    message = f"Your ScrimVerse OTP is {otp_code}. Valid for 10 minutes. Do not share this code."
-
-    try:
-        response = client.publish(
-            PhoneNumber=f"+91{phone_number}",
-            Message=message,
-            MessageAttributes={
-                'AWS.SNS.SMS.SenderID': {
-                    'DataType': 'String',
-                    'StringValue': 'ScrimVerse'
-                },
-                'AWS.SNS.SMS.SMSType': {
-                    'DataType': 'String',
-                    'StringValue': 'Transactional'
-                }
-            }
-        )
-        logger.info(f"OTP SMS sent to +91{phone_number}, MessageId: {response.get('MessageId')}")
-        return True
-    except ClientError as e:
-        logger.error(f"Failed to send OTP SMS to +91{phone_number}: {e}")
-        return False
+    logger.warning(f"MSG91 failed, falling back to SNS for {phone_number}")
+    return _send_via_sns(phone_number, message)

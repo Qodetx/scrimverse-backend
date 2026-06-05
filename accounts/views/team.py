@@ -1763,6 +1763,10 @@ class AcceptInviteView(APIView):
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
+        elif invite.invite_type == 'link':
+            # WhatsApp/link invite: open to anyone with the link, just link the user
+            invite.player = user
+
         else:
             # Email invite (invite_type == 'email' or legacy records without invite_type)
             if not invite.invited_email:

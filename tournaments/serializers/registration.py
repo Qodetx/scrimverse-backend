@@ -399,7 +399,9 @@ class TournamentRegistrationInitSerializer(serializers.Serializer):
                         {"teammate_usernames": "You cannot add yourself as a teammate."}
                     )
                 try:
-                    u = User.objects.get(username__iexact=uname, user_type='player')
+                    u = User.objects.filter(username__iexact=uname, user_type='player').first()
+                    if not u:
+                        raise User.DoesNotExist
                     user_objects.append(u)
                 except User.DoesNotExist:
                     raise serializers.ValidationError(

@@ -48,6 +48,7 @@ from accounts.views import (
     DeclineInviteView,
     SendOTPView,
     UpdatePhoneView,
+    UpdatePhoneMsg91View,
     SendRegistrationOTPView,
     VerifyRegistrationOTPView,
     ExportDataView,
@@ -55,6 +56,9 @@ from accounts.views import (
     RequestDataExportView,
     DataExportDetailView,
     DataExportPDFView,
+    SendPhoneAuthOTPView,
+    PhoneLoginView,
+    PhoneRegisterView,
 )
 
 router = DefaultRouter()
@@ -80,8 +84,13 @@ urlpatterns = [
     path("change-password/", ChangePasswordView.as_view(), name="change-password"),
     path("send-otp/", SendOTPView.as_view(), name="send-otp"),
     path("update-phone/", UpdatePhoneView.as_view(), name="update-phone"),
+    path("update-phone-msg91/", UpdatePhoneMsg91View.as_view(), name="update-phone-msg91"),
     path("send-registration-otp/", SendRegistrationOTPView.as_view(), name="send-registration-otp"),
     path("verify-registration-otp/", VerifyRegistrationOTPView.as_view(), name="verify-registration-otp"),
+    # Phone-based authentication (login + signup with OTP, no email/password needed)
+    path("send-phone-auth-otp/", SendPhoneAuthOTPView.as_view(), name="send-phone-auth-otp"),
+    path("phone-login/", PhoneLoginView.as_view(), name="phone-login"),
+    path("phone-register/", PhoneRegisterView.as_view(), name="phone-register"),
     path("export-data/", ExportDataView.as_view(), name="export-data"),
     path("request-data-export/", RequestDataExportView.as_view(), name="request-data-export"),
     path("data-export/<uuid:token>/", DataExportDetailView.as_view(), name="data-export-detail"),

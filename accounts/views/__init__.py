@@ -36,6 +36,13 @@ from accounts.views.team import (  # noqa: F401
 from accounts.views.otp_views import (  # noqa: F401
     SendOTPView,
     UpdatePhoneView,
+    UpdatePhoneMsg91View,
     SendRegistrationOTPView,
     VerifyRegistrationOTPView,
+)
+
+from accounts.views.phone_auth import (  # noqa: F401
+    SendPhoneAuthOTPView,
+    PhoneLoginView,
+    PhoneRegisterView,
 )
