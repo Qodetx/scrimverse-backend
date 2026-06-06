@@ -461,10 +461,16 @@ class UpdateTournamentFieldsView(generics.UpdateAPIView):
         instance = self.get_object()
 
         # Only allow editing upcoming tournaments — once started, configuration is locked.
-        # Exception: live_link can always be updated (host may add stream link after tournament starts).
+        # Exceptions: live_link, rules, description, and rounds (match counts) can always be updated.
         request_fields = set(request.data.keys())
-        live_link_only = request_fields <= {"live_link"}
-        if instance.status != "upcoming" and not live_link_only:
+        always_editable = {
+            "live_link", "title", "rules", "description",
+            "rounds", "round_names", "round_dates",
+            "special_awards", "coupon_distribution",
+            "tournament_start", "placement_points", "prize_distribution",
+            "entry_fee", "prize_pool", "max_participants", "banner_image",
+        }
+        if instance.status != "upcoming" and not request_fields <= always_editable:
             return Response(
                 {"detail": "Tournament configuration can only be edited while the tournament is upcoming."},
                 status=status.HTTP_403_FORBIDDEN,
