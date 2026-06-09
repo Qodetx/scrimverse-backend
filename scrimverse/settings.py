@@ -416,4 +416,8 @@ EMAIL_USE_LOCALTIME = True
 # ==================== AWS SNS (SMS) CONFIGURATION ====================
 AWS_SNS_ACCESS_KEY_ID = config("AWS_SNS_ACCESS_KEY_ID", default="")
 AWS_SNS_SECRET_ACCESS_KEY = config("AWS_SNS_SECRET_ACCESS_KEY", default="")
-AWS_SNS_REGION = config("AWS_SNS_REGION", default="ap-south-1")
+AWS_SNS_REGION = config("AWS_SNS_REGION", default="ap-south-2")
+
+# MSG91 SMS (primary OTP provider)
+MSG91_AUTH_KEY = config("MSG91_AUTH_KEY", default="")
+MSG91_TEMPLATE_ID = config("MSG91_TEMPLATE_ID", default="")

@@ -1846,20 +1846,23 @@ class AcceptInviteView(APIView):
             if existing_member:
                 # User already exists as team member, don't create duplicate
                 team_member = existing_member
-                # Update per-member temp status if needed
-                if existing_member.is_temporary != member_temp:
-                    existing_member.is_temporary = member_temp
-                    existing_member.conversion_deadline = member_deadline
+                # Only upgrade temp->perm, never downgrade perm->temp.
+                # A second invite accept must not strip an already-permanent membership.
+                if existing_member.is_temporary and not member_temp:
+                    existing_member.is_temporary = False
+                    existing_member.conversion_deadline = None
                     existing_member.save(update_fields=['is_temporary', 'conversion_deadline'])
                 logger.info(f"User {user.username} already exists in team {team.name}, not duplicating")
             else:
                 # Check if exists by username only (in case user field wasn't set initially)
                 existing_by_username = TeamMember.objects.filter(team=team, username=user.username).first()
                 if existing_by_username:
-                    # Update the user field on existing entry
+                    # Update the user field on existing entry.
+                    # Only upgrade temp->perm, never downgrade perm->temp.
                     existing_by_username.user = user
-                    existing_by_username.is_temporary = member_temp
-                    existing_by_username.conversion_deadline = member_deadline
+                    if existing_by_username.is_temporary and not member_temp:
+                        existing_by_username.is_temporary = False
+                        existing_by_username.conversion_deadline = None
                     existing_by_username.save(update_fields=['user', 'is_temporary', 'conversion_deadline'])
                     team_member = existing_by_username
                     logger.info(f"Updated user field for {user.username} in team {team.name}")
