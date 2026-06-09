@@ -318,12 +318,12 @@ class TeamViewSet(viewsets.ModelViewSet):
         if team.captain != request.user:
             return Response({"error": "Only the captain can remove members"}, status=status.HTTP_403_FORBIDDEN)
 
-        # Block removal after tournament registration closes
-        if team.is_temporary and team.linked_tournament:
+        # Block removal after tournament starts (applies to all teams, temp or permanent)
+        if team.linked_tournament:
             linked_t = team.linked_tournament
-            if linked_t.registration_end and timezone.now() > linked_t.registration_end:
+            if linked_t.tournament_start and timezone.now() > linked_t.tournament_start:
                 return Response(
-                    {"error": "Registration has closed. Team roster is locked."},
+                    {"error": "Tournament has started. Team roster is locked."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
@@ -339,10 +339,37 @@ class TeamViewSet(viewsets.ModelViewSet):
             )
 
         removed_user = member.user
+
+        # Block if member is in tournament snapshot and no one is waiting to auto-promote
+        if team.linked_tournament and removed_user:
+            try:
+                from tournaments.models import TournamentRegistration
+                _reg_check = TournamentRegistration.objects.filter(team=team, status='confirmed').first()
+                if _reg_check:
+                    _username_lower = removed_user.username.lower()
+                    _in_snapshot = any(
+                        m.get('username', '').lower() == _username_lower
+                        for m in (_reg_check.team_members or [])
+                    )
+                    if _in_snapshot:
+                        _registered = {m.get('username', '').lower() for m in (_reg_check.team_members or [])}
+                        _captain_lower = team.captain.username.lower() if team.captain else ''
+                        _registered.add(_captain_lower)
+                        _waiting = TeamMember.objects.filter(team=team).exclude(
+                            user__username__in=_registered
+                        ).exclude(user=team.captain).exclude(id=member.id).first()
+                        if not _waiting:
+                            return Response(
+                                {"error": "Add a replacement player to the team before removing a registered member."},
+                                status=status.HTTP_400_BAD_REQUEST,
+                            )
+            except Exception as _e:
+                logger.error(f"Pre-removal snapshot check failed: {_e}")
+
         member.delete()
 
-        # If temp team: remove from registration JSON and auto-promote next unregistered member
-        if team.is_temporary:
+        # For any team with a linked tournament: remove from registration snapshot and auto-promote
+        if team.linked_tournament:
             try:
                 from tournaments.models import TournamentRegistration
                 registration = TournamentRegistration.objects.filter(team=team, status='confirmed').first()
@@ -1618,6 +1645,31 @@ class TeamViewSet(viewsets.ModelViewSet):
                 {"error": "Cannot cancel an accepted invite"},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        # Clean up invited_members_status in any linked tournament registration
+        if team.linked_tournament:
+            try:
+                from tournaments.models import TournamentRegistration
+                reg = TournamentRegistration.objects.filter(team=team, status='confirmed').first()
+                if reg and reg.invited_members_status:
+                    identifier = (
+                        invite.invited_email
+                        or invite.phone_number
+                        or (invite.player.username if invite.player else None)
+                    )
+                    if identifier:
+                        identifier_lower = identifier.lower()
+                        keys_to_del = [
+                            k for k, v in reg.invited_members_status.items()
+                            if k.lower() == identifier_lower
+                            or (v.get('username') or '').lower() == identifier_lower
+                        ]
+                        for k in keys_to_del:
+                            del reg.invited_members_status[k]
+                        if keys_to_del:
+                            reg.save(update_fields=['invited_members_status', 'updated_at'])
+            except Exception as _e:
+                logger.error(f"Failed to clean invited_members_status on cancel_invite: {_e}")
 
         invite.delete()
         return Response({"message": "Invite cancelled"}, status=status.HTTP_200_OK)

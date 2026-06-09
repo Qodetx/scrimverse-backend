@@ -961,8 +961,10 @@ class SelectTeamsView(generics.GenericAPIView):
 
 class SubmitIGNView(APIView):
     """
-    Player submits their own IGN for a specific tournament registration.
+    Captain submits IGNs for all team members.
     POST /api/tournaments/<tournament_id>/registrations/<registration_id>/submit-ign/
+    Body: {"ign_submissions": {"username1": "IGN1", "username2": "IGN2", ...}}
+    Can be re-submitted until tournament starts.
     """
 
     permission_classes = [permissions.IsAuthenticated]
@@ -975,53 +977,56 @@ class SubmitIGNView(APIView):
         except TournamentRegistration.DoesNotExist:
             return Response({"error": "Registration not found."}, status=status.HTTP_404_NOT_FOUND)
 
-        # Only the registered captain can submit IGN via this endpoint
+        # Only the captain can submit/edit IGNs
         if registration.player.user != request.user:
-            # Also allow team members who are in team_members list
-            username = request.user.username
-            is_member = any(
-                m.get("username") == username for m in (registration.team_members or [])
-            )
-            if not is_member:
-                return Response({"error": "You are not part of this registration."}, status=status.HTTP_403_FORBIDDEN)
+            return Response({"error": "Only the team captain can submit IGNs."}, status=status.HTTP_403_FORBIDDEN)
 
-        # If already locked and tournament not completed, block re-submission
         tournament = registration.tournament
-        if registration.ign_locked and tournament.status != "completed":
+
+        # Block once tournament has started
+        if tournament.status in ("ongoing", "completed"):
             return Response(
-                {"error": "IGN is locked for this tournament and cannot be changed."},
+                {"error": "IGNs are locked once the tournament has started."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        ign = (request.data.get("ign") or "").strip()
-        if not ign:
-            return Response({"error": "IGN cannot be empty."}, status=status.HTTP_400_BAD_REQUEST)
-        if len(ign) > 50:
-            return Response({"error": "IGN must be 50 characters or less."}, status=status.HTTP_400_BAD_REQUEST)
+        incoming = request.data.get("ign_submissions")
+        if not isinstance(incoming, dict) or not incoming:
+            return Response({"error": "ign_submissions must be a non-empty object."}, status=status.HTTP_400_BAD_REQUEST)
 
-        username = request.user.username
+        # Validate each IGN value
+        cleaned = {}
+        for uname, ign_val in incoming.items():
+            ign_clean = (ign_val or "").strip()
+            if not ign_clean:
+                return Response({"error": f"IGN for {uname} cannot be empty."}, status=status.HTTP_400_BAD_REQUEST)
+            if len(ign_clean) > 50:
+                return Response({"error": f"IGN for {uname} must be 50 characters or less."}, status=status.HTTP_400_BAD_REQUEST)
+            cleaned[uname] = ign_clean
 
-        # Save IGN to registration
+        # Merge with existing submissions (captain can update selectively)
         submissions = dict(registration.ign_submissions or {})
-        submissions[username] = ign
+        submissions.update(cleaned)
+
         TournamentRegistration.objects.filter(pk=registration.pk).update(
             ign_submissions=submissions, ign_locked=True
         )
         registration.ign_submissions = submissions
         registration.ign_locked = True
 
-        # Update player profile game_profiles with the new IGN
-        try:
-            profile = request.user.player_profile
-            game_profiles = dict(profile.game_profiles or {})
-            game_name = tournament.game_name or tournament.game
-            existing = game_profiles.get(game_name, {})
-            existing["ign"] = ign
-            game_profiles[game_name] = existing
-            profile.game_profiles = game_profiles
-            profile.save(update_fields=["game_profiles"])
-        except Exception:
-            pass  # Profile update is best-effort; don't fail the whole request
+        # Update each player's profile with their IGN (best-effort)
+        game_name = tournament.game_name or tournament.game
+        from accounts.models import User as _User
+        for uname, ign_val in cleaned.items():
+            try:
+                u = _User.objects.filter(username=uname).select_related('player_profile').first()
+                if u and hasattr(u, 'player_profile'):
+                    gp = dict(u.player_profile.game_profiles or {})
+                    gp[game_name] = {**gp.get(game_name, {}), "ign": ign_val}
+                    u.player_profile.game_profiles = gp
+                    u.player_profile.save(update_fields=["game_profiles"])
+            except Exception:
+                pass
 
         return Response(
             {
