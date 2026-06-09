@@ -37,11 +37,13 @@ from tournaments.views import (  # Tournament URLs; Registration URLs; Rating UR
     RoundGroupsListView,
     RoundResultsView,
     RoundSlotListExportView,
+    ShuffleGroupsView,
     StartMatchView,
     EndMatchView,
     UpdateMatchCredentialsView,
     SubmitMatchScoresView,
     GetTeamPlayersView,
+    SubmitIGNView,
 )
 
 urlpatterns = [
@@ -99,6 +101,11 @@ urlpatterns = [
         RoundSlotListExportView.as_view(),
         name="round-slots-export",
     ),
+    path(
+        "<int:tournament_id>/rounds/<int:round_number>/shuffle/",
+        ShuffleGroupsView.as_view(),
+        name="shuffle-groups",
+    ),
     # Match Management (Old Implementation)
     path("<int:tournament_id>/groups/<int:group_id>/matches/start/", StartMatchView.as_view(), name="start-match"),
     path("<int:tournament_id>/matches/<int:match_id>/end/", EndMatchView.as_view(), name="end-match"),
@@ -113,6 +120,12 @@ urlpatterns = [
         "<int:tournament_id>/teams/<int:registration_id>/players/",
         GetTeamPlayersView.as_view(),
         name="get-team-players",
+    ),
+    # IGN Submission
+    path(
+        "<int:tournament_id>/registrations/<int:registration_id>/submit-ign/",
+        SubmitIGNView.as_view(),
+        name="submit-ign",
     ),
     # Host Rating
     path("host/<int:host_id>/rate/", HostRatingCreateView.as_view(), name="host-rate"),

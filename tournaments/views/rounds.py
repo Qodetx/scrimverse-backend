@@ -73,12 +73,13 @@ class StartRoundView(generics.GenericAPIView):
             try:
                 registrations = TournamentRegistration.objects.filter(
                     tournament=tournament, status="confirmed"
-                ).select_related("team")
+                ).select_related("team").prefetch_related("team__memberships")
                 notifications = []
                 for reg in registrations:
-                    member_user_ids = TeamMember.objects.filter(
-                        team=reg.team, user__isnull=False
-                    ).values_list("user_id", flat=True)
+                    member_user_ids = [
+                        m.user_id for m in reg.team.memberships.all()
+                        if m.user_id is not None
+                    ]
                     for user_id in member_user_ids:
                         notifications.append(
                             Notification(

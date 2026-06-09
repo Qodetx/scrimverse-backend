@@ -31,7 +31,7 @@ class TournamentRegistrationSerializer(serializers.ModelSerializer):
     class Meta:
         model = TournamentRegistration
         fields = "__all__"
-        read_only_fields = ("player", "tournament", "registered_at", "updated_at", "team_members", "performance")
+        read_only_fields = ("player", "tournament", "registered_at", "updated_at", "team_members", "performance", "ign_submissions", "ign_locked")
 
     def get_performance(self, obj):
         # Aggregate scores for this registration

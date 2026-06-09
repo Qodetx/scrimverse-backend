@@ -55,6 +55,10 @@ app.conf.beat_schedule = {
         "task": "tournaments.tasks.notify_credential_release",
         "schedule": crontab(minute="*"),  # Run every minute
     },
+    "notify-match-credential-release": {
+        "task": "tournaments.tasks.notify_match_credential_release",
+        "schedule": crontab(minute="*"),  # Run every minute
+    },
     "notify-slot-list-release": {
         "task": "tournaments.tasks.notify_slot_list_release",
         "schedule": crontab(minute="*"),  # Run every minute

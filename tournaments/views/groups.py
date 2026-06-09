@@ -4,9 +4,11 @@ Handles round configuration, group listing, and round results.
 """
 import csv
 import logging
+import random
 import re
 
 from django.http import StreamingHttpResponse
+from django.utils import timezone
 
 from rest_framework import generics, permissions
 from rest_framework.permissions import IsAuthenticated
@@ -370,6 +372,74 @@ class ConfigureRoundView(generics.GenericAPIView):
         })
 
 
+class ShuffleGroupsView(generics.GenericAPIView):
+    """
+    Shuffle team assignments across existing groups for a round.
+    POST /api/tournaments/<tournament_id>/rounds/<round_number>/shuffle/
+
+    Redistributes all teams randomly across the existing groups while preserving
+    the group count and match structure. Only allowed when round_status is 'pre_configured'.
+    """
+
+    permission_classes = [IsHostUser]
+
+    def post(self, request, tournament_id, round_number):
+        host_profile = HostProfile.objects.get(user=request.user)
+        tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
+
+        round_key = str(round_number)
+        round_status_val = tournament.round_status or {}
+
+        # Support both plain string and dict format for round_status
+        status_entry = round_status_val.get(round_key, "upcoming")
+        if isinstance(status_entry, dict):
+            current_status = status_entry.get("status", "upcoming")
+        else:
+            current_status = status_entry
+
+        if current_status != "pre_configured":
+            return Response(
+                {"error": "Groups can only be shuffled when the round is in pre_configured state."},
+                status=400,
+            )
+
+        groups = list(Group.objects.filter(tournament=tournament, round_number=round_number))
+        if not groups:
+            return Response({"error": f"Round {round_number} has no configured groups."}, status=400)
+
+        # Collect all teams from all groups in their current distribution sizes
+        group_sizes = [group.teams.count() for group in groups]
+        all_teams = []
+        for group in groups:
+            all_teams.extend(list(group.teams.all()))
+
+        if not all_teams:
+            return Response({"error": "No teams found in groups."}, status=400)
+
+        # Shuffle all teams randomly
+        random.shuffle(all_teams)
+
+        # Redistribute back into the same groups preserving original sizes
+        offset = 0
+        for group, size in zip(groups, group_sizes):
+            new_slice = all_teams[offset: offset + size]
+            group.teams.set(new_slice)
+            offset += size
+
+        logger.info(
+            f"Groups shuffled - Tournament: {tournament.id}, Round: {round_number}, "
+            f"Groups: {len(groups)}, Teams: {len(all_teams)}"
+        )
+
+        return Response(
+            {
+                "message": f"Round {round_number} groups have been reshuffled.",
+                "groups": len(groups),
+                "teams": len(all_teams),
+            }
+        )
+
+
 class RoundGroupsListView(generics.GenericAPIView):
     """
     Get all groups for a tournament round
@@ -459,9 +529,25 @@ class RoundGroupsListView(generics.GenericAPIView):
                             "id": match.id,
                             "match_number": match.match_number,
                             "status": match.status,
-                            # Strip credentials when round is pre-configured and viewer is a player
-                            "match_id": match.match_id if (is_host or not is_pre_configured) else None,
-                            "match_password": match.match_password if (is_host or not is_pre_configured) else None,
+                            # Credentials visible to host always; to players when round is not
+                            # pre_configured AND (no scheduled release time OR release time has passed)
+                            "match_id": match.match_id if (
+                                is_host or (
+                                    not is_pre_configured and (
+                                        match.credential_release_time is None or
+                                        match.credential_release_time <= timezone.now()
+                                    )
+                                )
+                            ) else None,
+                            "match_password": match.match_password if (
+                                is_host or (
+                                    not is_pre_configured and (
+                                        match.credential_release_time is None or
+                                        match.credential_release_time <= timezone.now()
+                                    )
+                                )
+                            ) else None,
+                            "credential_release_time": match.credential_release_time,
                             "scheduled_date": str(match.scheduled_date) if match.scheduled_date else None,
                             "scheduled_time": str(match.scheduled_time) if match.scheduled_time else None,
                             "map_name": match.map_name or None,

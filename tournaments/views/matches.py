@@ -78,11 +78,21 @@ class StartMatchView(generics.GenericAPIView):
                         status=400,
                     )
 
+        # Parse optional scheduled credential release time
+        credential_release_time = None
+        raw_release = request.data.get("credential_release_time")
+        if raw_release:
+            from django.utils.dateparse import parse_datetime
+            parsed = parse_datetime(raw_release)
+            if parsed:
+                credential_release_time = parsed if parsed.tzinfo else timezone.make_aware(parsed)
+
         # Update match details
         match.match_id = match_id
         match.match_password = match_password if requires_password else ""
         match.status = "ongoing"
         match.started_at = timezone.now()
+        match.credential_release_time = credential_release_time
         match.save()
 
         # Update group status to ongoing if it was waiting
@@ -90,32 +100,33 @@ class StartMatchView(generics.GenericAPIView):
             group.status = "ongoing"
             group.save(update_fields=["status"])
 
-        # Send credential notification to players in this group only
-        group_registrations = TournamentRegistration.objects.filter(
-            tournament_groups=group
-        ).select_related("team")
-        cred_notifications = []
-        for reg in group_registrations:
-            member_user_ids = TeamMember.objects.filter(
-                team=reg.team, user__isnull=False
-            ).values_list("user_id", flat=True)
-            for user_id in member_user_ids:
-                cred_notifications.append(
-                    Notification(
-                        user_id=user_id,
-                        type="credential_release",
-                        related_id=tournament.id,
-                        related_type="tournament",
-                        title="Room ID is ready!",
-                        message=(
-                            f"Room ID & Password for '{tournament.title}' Match {match.match_number} "
-                            f"({group.group_name}) are now available. Check your ID & Passwords tab."
-                        ),
-                        is_read=False,
+        # Send credential notification immediately only if no scheduled release time
+        if not credential_release_time:
+            group_registrations = TournamentRegistration.objects.filter(
+                tournament_groups=group
+            ).select_related("team")
+            cred_notifications = []
+            for reg in group_registrations:
+                member_user_ids = TeamMember.objects.filter(
+                    team=reg.team, user__isnull=False
+                ).values_list("user_id", flat=True)
+                for user_id in member_user_ids:
+                    cred_notifications.append(
+                        Notification(
+                            user_id=user_id,
+                            type="credential_release",
+                            related_id=tournament.id,
+                            related_type="tournament",
+                            title="Room ID is ready!",
+                            message=(
+                                f"Room ID & Password for '{tournament.title}' Match {match.match_number} "
+                                f"({group.group_name}) are now available. Check your ID & Passwords tab."
+                            ),
+                            is_read=False,
+                        )
                     )
-                )
-        if cred_notifications:
-            Notification.objects.bulk_create(cred_notifications, ignore_conflicts=True)
+            if cred_notifications:
+                Notification.objects.bulk_create(cred_notifications, ignore_conflicts=True)
 
         # Build response
         response_match = {
@@ -169,10 +180,21 @@ class UpdateMatchCredentialsView(generics.GenericAPIView):
         if not match_room_id:
             return Response({"error": "match_id is required"}, status=400)
 
+        # Parse optional credential release time update
+        raw_release = request.data.get("credential_release_time", "UNCHANGED")
+        if raw_release != "UNCHANGED":
+            if raw_release:
+                from django.utils.dateparse import parse_datetime
+                parsed = parse_datetime(raw_release)
+                if parsed:
+                    match.credential_release_time = parsed if parsed.tzinfo else timezone.make_aware(parsed)
+            else:
+                match.credential_release_time = None
+
         is_first_release = not match.match_id  # credentials being set for the first time
         match.match_id = match_room_id
         match.match_password = match_password
-        match.save(update_fields=["match_id", "match_password"])
+        match.save(update_fields=["match_id", "match_password", "credential_release_time"])
 
         # Send credential notification only to players in this match's group
         if is_first_release:
@@ -456,33 +478,8 @@ class GetTeamPlayersView(generics.GenericAPIView):
                     )
                     logger.debug(f"Team members found - Team ID: {registration.team_id}, Players: {players_data}")
 
-        # If no players from team_members, try to get from Team model
-        elif registration.team:
-            # Get all team members from the Team
-            team_members_qs = TeamMember.objects.filter(team=registration.team).select_related(
-                "user", "user__player_profile"
-            )
-
-            for team_member in team_members_qs:
-                try:
-                    player_profile = team_member.user.player_profile
-                    players_data.append(
-                        {
-                            "id": player_profile.id,
-                            "username": team_member.user.username,
-                            "preferred_games": player_profile.preferred_games,
-                            "bio": player_profile.bio,
-                            "profile_picture": (
-                                player_profile.user.profile_picture.url if player_profile.user.profile_picture else None
-                            ),
-                            "is_captain": team_member.is_captain,
-                        }
-                    )
-                except (PlayerProfile.DoesNotExist, AttributeError):
-                    logger.warning(
-                        f"Player profile not found for team member - Team ID: {registration.team_id}, User ID: {team_member.user_id}"  # noqa E501
-                    )
-                    continue
+        # team_members is the authoritative snapshot for this specific tournament registration.
+        # No fallback to the Team model — it may contain members not part of this registration.
 
         return Response(
             {

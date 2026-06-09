@@ -32,6 +32,7 @@ from tournaments.views.registration import (  # noqa: F401
     TournamentRegistrationsView,
     TournamentRegistrationExportView,
     SelectTeamsView,
+    SubmitIGNView,
 )
 
 from tournaments.views.rounds import (  # noqa: F401
@@ -51,6 +52,7 @@ from tournaments.views.groups import (  # noqa: F401
     RoundGroupsListView,
     RoundResultsView,
     RoundSlotListExportView,
+    ShuffleGroupsView,
 )
 
 from tournaments.views.matches import (  # noqa: F401

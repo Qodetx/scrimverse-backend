@@ -320,6 +320,10 @@ class TournamentRegistration(models.Model):
     is_team_created = models.BooleanField(default=False, help_text="Track if real Team object has been created after payment")
     invited_members_status = models.JSONField(default=dict, blank=True, help_text="Status of invited members: {email: {status: 'pending'|'accepted'|'declined'|'expired', username: str|null}}")
 
+    # IGN (In-Game Name) submission per player for this tournament
+    ign_submissions = models.JSONField(default=dict, blank=True, help_text="Per-player IGN for this tournament. {username: ign, ...}")
+    ign_locked = models.BooleanField(default=False, help_text="Whether the IGN has been submitted and locked for this registration")
+
     # Metadata
     registered_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -331,6 +335,9 @@ class TournamentRegistration(models.Model):
         db_table = "tournament_registrations"
         unique_together = ("tournament", "player")
         ordering = ["-registered_at"]
+        indexes = [
+            models.Index(fields=["tournament", "status"], name="reg_tournament_status_idx"),
+        ]
 
     def save(self, *args, **kwargs):
         """
@@ -485,6 +492,7 @@ class Match(models.Model):
     scheduled_time = models.TimeField(null=True, blank=True, help_text="Scheduled time for this match")
     map_name = models.CharField(max_length=100, null=True, blank=True, help_text="Game map name for this match (e.g., Erangel, Miramar)")
     winner = models.ForeignKey(TournamentRegistration, on_delete=models.SET_NULL, null=True, blank=True, related_name="won_matches", help_text="Winning team for 5v5 format")
+    credential_release_time = models.DateTimeField(null=True, blank=True, help_text="When this match's room ID/password become visible to players. Null = reveal immediately.")
 
     class Meta:
         unique_together = ("group", "match_number")

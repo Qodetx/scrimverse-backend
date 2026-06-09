@@ -401,6 +401,63 @@ def notify_credential_release():
 
 
 @shared_task
+def notify_match_credential_release():
+    """
+    Runs every minute.
+    Finds matches whose credential_release_time just passed (within last 2 minutes)
+    and sends "Room ID is ready!" notification to players in that group.
+    Uses a cache key to prevent duplicate notifications per match.
+    """
+    now = timezone.now()
+    window_start = now - timezone.timedelta(minutes=2)
+
+    recently_released = Match.objects.filter(
+        credential_release_time__gte=window_start,
+        credential_release_time__lte=now,
+    ).select_related("group__tournament")
+
+    notified_count = 0
+    for match in recently_released:
+        cache_key = f"match_cred_notif_sent:{match.id}"
+        if cache.get(cache_key):
+            continue
+
+        tournament = match.group.tournament
+        group = match.group
+
+        group_registrations = TournamentRegistration.objects.filter(
+            tournament_groups=group
+        ).select_related("team")
+
+        for reg in group_registrations:
+            member_user_ids = TeamMember.objects.filter(
+                team=reg.team, user__isnull=False
+            ).values_list("user_id", flat=True)
+            for user_id in member_user_ids:
+                Notification.objects.get_or_create(
+                    user_id=user_id,
+                    type="credential_release",
+                    related_id=tournament.id,
+                    related_type="tournament",
+                    defaults={
+                        "title": "Room ID is ready!",
+                        "message": (
+                            f"Room ID & Password for '{tournament.title}' Match {match.match_number} "
+                            f"({group.group_name}) are now available. Check your ID & Passwords tab."
+                        ),
+                        "is_read": False,
+                    },
+                )
+                notified_count += 1
+
+        cache.set(cache_key, True, 3600)
+
+    if notified_count:
+        logger.info(f"Sent scheduled match credential notifications to {notified_count} players")
+    return {"notified": notified_count}
+
+
+@shared_task
 def notify_slot_list_release():
     """
     Runs every minute.
