@@ -1300,7 +1300,9 @@ class TeamViewSet(viewsets.ModelViewSet):
         if team.members.count() >= cap:
             return Response({"error": f"Team is full (max {cap} members for this game mode)"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Get tournament registration for temp team (to link new invites)
+        # Get tournament registration to link new invites:
+        # - for temp teams: auto-detect from the team
+        # - for perm teams: caller can pass registration_id (e.g. from IGN modal)
         temp_reg = None
         if team.is_temporary:
             try:
@@ -1308,6 +1310,16 @@ class TeamViewSet(viewsets.ModelViewSet):
                 temp_reg = TournamentRegistration.objects.filter(team=team, status='confirmed').first()
             except Exception:
                 pass
+        else:
+            registration_id = request.data.get("registration_id")
+            if registration_id:
+                try:
+                    from tournaments.models import TournamentRegistration
+                    temp_reg = TournamentRegistration.objects.filter(
+                        id=registration_id, team=team, status='confirmed'
+                    ).first()
+                except Exception:
+                    pass
 
         invites = request.data.get("invites", [])
         if not invites:
