@@ -348,11 +348,11 @@ class TeamViewSet(viewsets.ModelViewSet):
                 if _reg_check:
                     _username_lower = removed_user.username.lower()
                     _in_snapshot = any(
-                        m.get('username', '').lower() == _username_lower
+                        (m.get('username') or '').lower() == _username_lower
                         for m in (_reg_check.team_members or [])
                     )
                     if _in_snapshot:
-                        _registered = {m.get('username', '').lower() for m in (_reg_check.team_members or [])}
+                        _registered = {(m.get('username') or '').lower() for m in (_reg_check.team_members or [])}
                         _captain_lower = team.captain.username.lower() if team.captain else ''
                         _registered.add(_captain_lower)
                         _waiting = TeamMember.objects.filter(team=team).exclude(
@@ -382,13 +382,13 @@ class TeamViewSet(viewsets.ModelViewSet):
                         registration.team_members = [
                             m for m in registration.team_members
                             if m.get('player_id') != removed_player_id
-                            and m.get('username', '').lower() != removed_user.username.lower()
+                            and (m.get('username') or '').lower() != removed_user.username.lower()
                         ]
 
                     # Remove from invited_members_status
                     if registration.invited_members_status:
                         for key in list(registration.invited_members_status.keys()):
-                            if registration.invited_members_status[key].get('username', '').lower() == removed_user.username.lower():
+                            if (registration.invited_members_status[key].get('username') or '').lower() == removed_user.username.lower():
                                 del registration.invited_members_status[key]
                                 break
 
@@ -400,7 +400,7 @@ class TeamViewSet(viewsets.ModelViewSet):
                     # Auto-promote next team member not yet registered
                     current_registered = len(registration.team_members or []) + 1  # +1 for captain
                     if current_registered < mode_cap:
-                        registered_usernames = {m.get('username', '').lower() for m in (registration.team_members or [])}
+                        registered_usernames = {(m.get('username') or '').lower() for m in (registration.team_members or [])}
                         captain_username = team.captain.username.lower() if team.captain else ''
                         registered_usernames.add(captain_username)
 
@@ -1646,12 +1646,12 @@ class TeamViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Clean up invited_members_status in any linked tournament registration
+        # Clean up tournament registration: invited_members_status + team_members snapshot + auto-promote
         if team.linked_tournament:
             try:
                 from tournaments.models import TournamentRegistration
                 reg = TournamentRegistration.objects.filter(team=team, status='confirmed').first()
-                if reg and reg.invited_members_status:
+                if reg:
                     identifier = (
                         invite.invited_email
                         or invite.phone_number
@@ -1659,17 +1659,66 @@ class TeamViewSet(viewsets.ModelViewSet):
                     )
                     if identifier:
                         identifier_lower = identifier.lower()
-                        keys_to_del = [
-                            k for k, v in reg.invited_members_status.items()
-                            if k.lower() == identifier_lower
-                            or (v.get('username') or '').lower() == identifier_lower
-                        ]
-                        for k in keys_to_del:
-                            del reg.invited_members_status[k]
-                        if keys_to_del:
-                            reg.save(update_fields=['invited_members_status', 'updated_at'])
+
+                        # 1. Remove from invited_members_status
+                        if reg.invited_members_status:
+                            keys_to_del = [
+                                k for k, v in reg.invited_members_status.items()
+                                if k.lower() == identifier_lower
+                                or (v.get('username') or '').lower() == identifier_lower
+                            ]
+                            for k in keys_to_del:
+                                del reg.invited_members_status[k]
+
+                        # 2. Remove from team_members snapshot (match email, phone, or username)
+                        if reg.team_members:
+                            reg.team_members = [
+                                m for m in reg.team_members
+                                if not (
+                                    (m.get('email') or '').lower() == identifier_lower
+                                    or (m.get('phone') or '') == identifier
+                                    or (m.get('username') or '').lower() == identifier_lower
+                                )
+                            ]
+
+                        # 3. Auto-promote next waiting team member if slot opened up
+                        mode_map = {'5v5': 5, 'Squad': 4, 'Duo': 2, 'Solo': 1}
+                        game_mode = reg.tournament.game_mode if reg.tournament else None
+                        mode_cap = mode_map.get(game_mode, 15)
+                        current_registered = len(reg.team_members or []) + 1  # +1 for captain
+                        if current_registered < mode_cap:
+                            registered_usernames = {
+                                (m.get('username') or '').lower()
+                                for m in (reg.team_members or [])
+                            }
+                            captain_username = team.captain.username.lower() if team.captain else ''
+                            registered_usernames.add(captain_username)
+
+                            next_member = TeamMember.objects.filter(team=team).exclude(
+                                user__username__in=registered_usernames
+                            ).exclude(user=team.captain).first()
+
+                            if next_member:
+                                next_user = next_member.user
+                                next_profile = getattr(next_user, 'player_profile', None)
+                                next_player_id = next_profile.id if next_profile else None
+                                if reg.team_members is None:
+                                    reg.team_members = []
+                                reg.team_members.append({
+                                    'username': next_user.username,
+                                    'player_id': next_player_id,
+                                    'is_registered': True,
+                                })
+                                if reg.invited_members_status is None:
+                                    reg.invited_members_status = {}
+                                reg.invited_members_status[next_user.username] = {
+                                    'status': 'accepted',
+                                    'username': next_user.username,
+                                }
+
+                        reg.save(update_fields=['team_members', 'invited_members_status', 'updated_at'])
             except Exception as _e:
-                logger.error(f"Failed to clean invited_members_status on cancel_invite: {_e}")
+                logger.error(f"Failed to update registration on cancel_invite: {_e}")
 
         invite.delete()
         return Response({"message": "Invite cancelled"}, status=status.HTTP_200_OK)
@@ -1980,7 +2029,7 @@ class AcceptInviteView(APIView):
                     member_matched = False
                     if invite.invite_type == 'phone' and member.get('phone') == invite.phone_number:
                         member_matched = True
-                    elif invite.invite_type == 'username' and member.get('username', '').lower() == user.username.lower():
+                    elif invite.invite_type == 'username' and (member.get('username') or '').lower() == user.username.lower():
                         member_matched = True
                     elif invite.invite_type == 'email' and member.get('email', '').lower() == (invite.invited_email or '').lower():
                         member_matched = True
