@@ -740,18 +740,44 @@ class TeamViewSet(viewsets.ModelViewSet):
             invite.status = "accepted"
             invite.save()
 
-            # Update invited_members_status on the linked TournamentRegistration
-            if invite.tournament_registration:
-                registration = invite.tournament_registration
+            # Update invited_members_status + team_members on the linked TournamentRegistration
+            if invite.tournament_registration_id:
+                from tournaments.models import TournamentRegistration as TReg
+                registration = TReg.objects.get(id=invite.tournament_registration_id)
                 if not registration.invited_members_status:
                     registration.invited_members_status = {}
-                match_key = request.user.username  # username invite uses username as key
-                for contact_key in list(registration.invited_members_status.keys()):
+                match_key = request.user.username
+                # Rebuild as new dict — Django JSONField doesn't detect in-place nested mutation
+                new_ims = {}
+                for contact_key, val in registration.invited_members_status.items():
                     if contact_key.lower() == match_key.lower():
-                        registration.invited_members_status[contact_key]['status'] = 'accepted'
-                        registration.invited_members_status[contact_key]['username'] = request.user.username
-                        break
-                registration.save(update_fields=['invited_members_status', 'updated_at'])
+                        new_ims[contact_key] = {'status': 'accepted', 'username': request.user.username}
+                    else:
+                        new_ims[contact_key] = val
+                registration.invited_members_status = new_ims
+                # Update team_members snapshot (same pattern as accept_invite)
+                player_profile = getattr(request.user, 'player_profile', None)
+                player_id = player_profile.id if player_profile else None
+                if registration.team_members is None:
+                    registration.team_members = []
+                member_found = False
+                updated_members = []
+                for member in registration.team_members:
+                    if (member.get('username') or '').lower() == match_key.lower():
+                        member = dict(member)
+                        member['username'] = request.user.username
+                        member['player_id'] = player_id
+                        member['is_registered'] = True
+                        member_found = True
+                    updated_members.append(member)
+                registration.team_members = updated_members
+                if not member_found:
+                    registration.team_members = registration.team_members + [{
+                        'username': request.user.username,
+                        'player_id': player_id,
+                        'is_registered': True,
+                    }]
+                registration.save(update_fields=['invited_members_status', 'team_members', 'updated_at'])
 
             # Build response with team info for frontend Registration Confirmed modal
             joined_count = TeamMember.objects.filter(team=team, is_captain=False).count() + 1
