@@ -128,6 +128,7 @@ class IssueReport(models.Model):
         on_delete=models.SET_NULL,
         related_name='issue_reports',
     )
+    evidence = models.FileField(upload_to='reports/', blank=True, null=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='open')
     admin_notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)

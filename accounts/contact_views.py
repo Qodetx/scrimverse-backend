@@ -70,4 +70,9 @@ class ReportIssueView(APIView):
             submitted_by=request.user if request.user.is_authenticated else None,
         )
 
+        evidence = request.FILES.get('evidence')
+        if evidence:
+            report.evidence = evidence
+            report.save()
+
         return Response({'success': True, 'report_id': report.id})

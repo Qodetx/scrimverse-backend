@@ -237,7 +237,7 @@ class IssueReportAdmin(admin.ModelAdmin):
 
     fieldsets = (
         ('Report Details', {
-            'fields': ('issue_type', 'priority', 'title', 'description', 'steps_to_reproduce'),
+            'fields': ('issue_type', 'priority', 'title', 'description', 'steps_to_reproduce', 'evidence', 'evidence_preview'),
         }),
         ('Reporter Info', {
             'fields': ('reporter_name', 'reporter_email', 'anonymous', 'submitted_by'),
@@ -246,6 +246,23 @@ class IssueReportAdmin(admin.ModelAdmin):
             'fields': ('status', 'admin_notes', 'created_at', 'updated_at'),
         }),
     )
+
+    readonly_fields = ['created_at', 'updated_at', 'submitted_by', 'evidence_preview']
+
+    @admin.display(description='Preview')
+    def evidence_preview(self, obj):
+        if not obj.evidence:
+            return '-'
+        url = obj.evidence.url
+        name = obj.evidence.name.lower()
+        if any(name.endswith(ext) for ext in ('.jpg', '.jpeg', '.png', '.gif', '.webp')):
+            return format_html(
+                '<a href="{}" target="_blank">'
+                '<img src="{}" style="max-height:200px;max-width:400px;border:1px solid #ccc;border-radius:4px;" />'
+                '</a>',
+                url, url,
+            )
+        return format_html('<a href="{}" target="_blank">📎 View / Download file</a>', url)
 
     @admin.display(description='Priority')
     def priority_badge(self, obj):
