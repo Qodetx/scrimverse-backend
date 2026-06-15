@@ -981,25 +981,22 @@ class SubmitIGNView(APIView):
         if registration.player.user != request.user:
             return Response({"error": "Only the team captain can submit IGNs."}, status=status.HTTP_403_FORBIDDEN)
 
+        # Fully locked registrations cannot be modified (all IGNs were submitted under old flow)
+        if registration.ign_locked:
+            return Response({"error": "IGNs are already locked for this registration."}, status=status.HTTP_403_FORBIDDEN)
+
         tournament = registration.tournament
 
-        # Block once tournament has started
-        if tournament.status in ("ongoing", "completed"):
-            return Response(
-                {"error": "IGNs are locked once the tournament has started."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         incoming = request.data.get("ign_submissions")
-        if not isinstance(incoming, dict) or not incoming:
-            return Response({"error": "ign_submissions must be a non-empty object."}, status=status.HTTP_400_BAD_REQUEST)
+        if not isinstance(incoming, dict):
+            return Response({"error": "ign_submissions must be an object."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Validate each IGN value
+        # Validate — skip empties, allow partial/empty submissions
         cleaned = {}
         for uname, ign_val in incoming.items():
             ign_clean = (ign_val or "").strip()
             if not ign_clean:
-                return Response({"error": f"IGN for {uname} cannot be empty."}, status=status.HTTP_400_BAD_REQUEST)
+                continue
             if len(ign_clean) > 50:
                 return Response({"error": f"IGN for {uname} must be 50 characters or less."}, status=status.HTTP_400_BAD_REQUEST)
             cleaned[uname] = ign_clean
@@ -1008,11 +1005,12 @@ class SubmitIGNView(APIView):
         submissions = dict(registration.ign_submissions or {})
         submissions.update(cleaned)
 
-        TournamentRegistration.objects.filter(pk=registration.pk).update(
-            ign_submissions=submissions, ign_locked=True
-        )
+        # Only update if new IGNs were actually entered — don't lock, allow future partial fills
+        if cleaned:
+            TournamentRegistration.objects.filter(pk=registration.pk).update(
+                ign_submissions=submissions
+            )
         registration.ign_submissions = submissions
-        registration.ign_locked = True
 
         # Update each player's profile with their IGN (best-effort)
         game_name = tournament.game_name or tournament.game
@@ -1033,6 +1031,7 @@ class SubmitIGNView(APIView):
                 "success": True,
                 "ign_submissions": registration.ign_submissions,
                 "ign_locked": registration.ign_locked,
+                "saved_count": len(cleaned),
             },
             status=status.HTTP_200_OK,
         )
