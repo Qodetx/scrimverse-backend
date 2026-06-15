@@ -914,13 +914,13 @@ class TournamentRegistrationCreateView(generics.CreateAPIView):
         )
         for registration in confirmed_registrations:
             if registration.team_members:
-                registered_player_ids = {member.get("id") for member in registration.team_members if member.get("id")}
+                registered_player_ids = {member.get("player_id") or member.get("id") for member in registration.team_members if member.get("player_id") or member.get("id")}
                 overlapping_ids = team_player_ids & registered_player_ids
                 if overlapping_ids:
                     registered_usernames = [
                         member.get("username")
                         for member in registration.team_members
-                        if member.get("id") in overlapping_ids
+                        if (member.get("player_id") or member.get("id")) in overlapping_ids
                     ]
                     raise ValidationError(
                         {
