@@ -11,7 +11,7 @@ from .models import BroadcastEmail, IssueReport
 
 
 class ScrollableCheckboxSelectMultiple(forms.CheckboxSelectMultiple):
-    """Checkbox list with a Users-page-style search bar and scrollable container."""
+    """Checkbox list with a search bar and scrollable container."""
 
     def render(self, name, value, attrs=None, renderer=None):
         inner_html = super().render(name, value, attrs, renderer)
@@ -20,6 +20,7 @@ class ScrollableCheckboxSelectMultiple(forms.CheckboxSelectMultiple):
             '<div style="width:100%;max-width:800px;">'
             '<div style="display:flex;gap:0;margin-bottom:0;border:1px solid #ccc;">'
             '<input type="text" placeholder="Search..." '
+            f'id="cbsearch__{name}" '
             'style="flex:1;padding:6px 10px;border:none;outline:none;font-size:13px;background:#fff;" '
             'onkeydown="if(event.key===\'Enter\'){event.preventDefault();event.stopPropagation();}" '
             'oninput="var q=this.value.toLowerCase();'
@@ -30,9 +31,10 @@ class ScrollableCheckboxSelectMultiple(forms.CheckboxSelectMultiple):
             '<button type="button" '
             'style="padding:6px 16px;background:#417690;color:#fff;border:none;'
             'font-size:13px;font-weight:bold;cursor:pointer;white-space:nowrap;" '
-            "onclick=\"this.previousElementSibling.value='';"
+            f"onclick=\"this.previousElementSibling.value='';"
             "document.getElementById('" + list_id + "').querySelectorAll('label')"
-            '.forEach(function(el){el.style.display=\'\';});">Clear</button>'
+            '.forEach(function(el){el.style.display=\'\';});'
+            '">Clear</button>'
             '</div>'
             '<div id="' + list_id + '" style="border:1px solid #ccc;border-top:none;height:200px;'
             'overflow-y:auto;padding:8px 12px;background:#fff;">'
@@ -49,6 +51,7 @@ class BroadcastEmailForm(forms.ModelForm):
         fields = "__all__"
         widgets = {
             "selected_tournaments": ScrollableCheckboxSelectMultiple,
+            "selected_groups": ScrollableCheckboxSelectMultiple,
             "selected_users": ScrollableCheckboxSelectMultiple,
         }
 
@@ -60,6 +63,8 @@ READONLY_AFTER_SEND = (
     "body",
     "recipient_type",
     "tournament_status_filter",
+    "registration_status_filter",
+    "ign_filter",
     "status",
     "total_sent",
     "sent_at",
@@ -117,6 +122,23 @@ class BroadcastEmailAdmin(admin.ModelAdmin):
             },
         ),
         (
+            "Participant Filters (Tournament Participants only)",
+            {
+                "fields": (
+                    "registration_status_filter",
+                    "ign_filter",
+                    "selected_groups",
+                ),
+                "description": (
+                    "Only applied when recipient type is 'Tournament Participants'. "
+                    "Narrow down further by round/group, registration status, or IGN submission. "
+                    "All filters stack — e.g. Confirmed + IGN Not Submitted + Group A sends only "
+                    "to confirmed teams in Group A who haven't submitted their IGNs yet. "
+                    "Tip: select a tournament above first — the group list will cascade automatically."
+                ),
+            },
+        ),
+        (
             "Status & Tracking",
             {
                 "fields": ("status", "total_sent", "sent_at", "error_message", "created_by", "created_at"),
@@ -162,8 +184,7 @@ class BroadcastEmailAdmin(admin.ModelAdmin):
     # ── Make fields read-only for already-sent broadcasts ────────────────────
     def get_readonly_fields(self, request, obj=None):
         if obj and obj.status in ("sent", "sending"):
-            return READONLY_AFTER_SEND + ("selected_tournaments", "selected_users")
-        # Always show tracking fields as read-only on existing objects
+            return READONLY_AFTER_SEND + ("selected_tournaments", "selected_groups", "selected_users")
         if obj:
             return ("status", "total_sent", "sent_at", "error_message", "created_by", "created_at")
         return ("status", "total_sent", "sent_at", "error_message", "created_at")

@@ -130,7 +130,6 @@ def _resolve_recipients(broadcast, TournamentRegistration, Tournament):
             if status_filter == "all":
                 tournament_qs = Tournament.objects.all()
             else:
-                # Map our filter value to Tournament.STATUS_CHOICES values
                 status_map = {
                     "upcoming": "upcoming",
                     "ongoing": "ongoing",
@@ -140,11 +139,32 @@ def _resolve_recipients(broadcast, TournamentRegistration, Tournament):
                     status=status_map.get(status_filter, "upcoming")
                 )
 
-        # Get confirmed registrations for those tournaments
+        # --- registration status filter ---
+        reg_status = getattr(broadcast, "registration_status_filter", "confirmed")
+        if reg_status == "all":
+            status_filter_kwargs = {}
+        else:
+            status_filter_kwargs = {"status": reg_status}
+
         registrations = TournamentRegistration.objects.filter(
             tournament__in=tournament_qs,
-            status="confirmed",
+            **status_filter_kwargs,
         ).select_related("player__user")
+
+        # --- group filter (round + group) ---
+        selected_groups = broadcast.selected_groups.all()
+        if selected_groups.exists():
+            registrations = registrations.filter(
+                tournament_groups__in=selected_groups
+            ).distinct()
+
+        # --- IGN filter ---
+        ign_filter = getattr(broadcast, "ign_filter", "all")
+        if ign_filter == "submitted":
+            # ign_submissions is a JSONField; non-empty means they submitted
+            registrations = registrations.exclude(ign_submissions={})
+        elif ign_filter == "not_submitted":
+            registrations = registrations.filter(ign_submissions={})
 
         emails = set()
         for reg in registrations:

@@ -18,3 +18,56 @@
     {% endif %}
     {{ block.super }}
 {% endblock %}
+
+{% block admin_change_form_document_ready %}
+{{ block.super }}
+<script>
+(function () {
+    // ── Cascade: when tournaments are checked, filter the group list ──────────
+    function updateGroupCascade() {
+        var tournamentList = document.getElementById('cblist__selected_tournaments');
+        var groupList     = document.getElementById('cblist__selected_groups');
+        var groupSearch   = document.getElementById('cbsearch__selected_groups');
+        if (!tournamentList || !groupList) return;
+
+        // Collect the text of every checked tournament label
+        var checkedNames = [];
+        tournamentList.querySelectorAll('input[type="checkbox"]:checked').forEach(function (cb) {
+            var lbl = cb.closest('label');
+            if (lbl) checkedNames.push(lbl.textContent.trim());
+        });
+
+        // Show/hide group checkboxes whose label starts with a checked tournament name
+        groupList.querySelectorAll('label').forEach(function (lbl) {
+            if (checkedNames.length === 0) {
+                lbl.style.display = '';
+            } else {
+                var text = lbl.textContent.trim();
+                var visible = checkedNames.some(function (t) { return text.indexOf(t) === 0; });
+                lbl.style.display = visible ? '' : 'none';
+            }
+        });
+
+        // Clear the group search box so the manual search doesn't fight the cascade
+        if (groupSearch) groupSearch.value = '';
+    }
+
+    function attachTournamentListeners() {
+        var tournamentList = document.getElementById('cblist__selected_tournaments');
+        if (!tournamentList) return;
+        tournamentList.addEventListener('change', function (e) {
+            if (e.target.type === 'checkbox') updateGroupCascade();
+        });
+        // Run once on load in case a saved broadcast already has tournaments ticked
+        updateGroupCascade();
+    }
+
+    // Django admin renders the form after DOMContentLoaded, so wait a tick
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', attachTournamentListeners);
+    } else {
+        attachTournamentListeners();
+    }
+})();
+</script>
+{% endblock %}

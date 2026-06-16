@@ -27,6 +27,19 @@ class BroadcastEmail(models.Model):
         ("completed", "Completed"),
     ]
 
+    REGISTRATION_STATUS_FILTER_CHOICES = [
+        ("confirmed", "Confirmed Only"),
+        ("pending", "Pending Only"),
+        ("rejected", "Rejected Only"),
+        ("all", "All Statuses"),
+    ]
+
+    IGN_FILTER_CHOICES = [
+        ("all", "All Teams"),
+        ("submitted", "IGN Submitted"),
+        ("not_submitted", "IGN Not Submitted Yet"),
+    ]
+
     subject = models.CharField(max_length=255)
     body = models.TextField(help_text="Plain text email body. You can include links by pasting full URLs.")
 
@@ -53,6 +66,30 @@ class BroadcastEmail(models.Model):
             "Only used when recipient type is 'Tournament Participants'. "
             "Filter which tournaments to include when no specific tournaments are selected."
         ),
+    )
+
+    # Granular participant filters (tournament_participants only)
+    selected_groups = models.ManyToManyField(
+        "tournaments.Group",
+        blank=True,
+        related_name="broadcast_emails",
+        help_text=(
+            "Narrow to specific rounds/groups (e.g. 'Round 1 – Group A'). "
+            "Leave empty to include all groups. Select a tournament first — the list "
+            "will cascade to show only that tournament's groups."
+        ),
+    )
+    registration_status_filter = models.CharField(
+        max_length=20,
+        choices=REGISTRATION_STATUS_FILTER_CHOICES,
+        default="confirmed",
+        help_text="Filter registrations by status. Default: Confirmed only.",
+    )
+    ign_filter = models.CharField(
+        max_length=20,
+        choices=IGN_FILTER_CHOICES,
+        default="all",
+        help_text="Filter by whether the team has submitted their IGNs.",
     )
 
     # Used when recipient_type = individual_users

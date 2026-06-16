@@ -264,6 +264,10 @@ class EndRoundView(generics.GenericAPIView):
         tournament.save(update_fields=["current_round", "round_status", "selected_teams"])
         cache.delete("tournaments:list:all")
 
+        # Trigger immediate leaderboard recalculation so standings reflect this round's scores
+        from tournaments.tasks.score_tasks import update_leaderboard
+        update_leaderboard.delay()
+
         return Response(
             {
                 "message": message,
