@@ -24,47 +24,47 @@ app.autodiscover_tasks()
 # Celery Beat schedule for periodic tasks
 app.conf.beat_schedule = {
     "update-tournament-statuses": {
-        "task": "tournaments.tasks.update_tournament_statuses",
+        "task": "tournaments.tasks.tournament_tasks.update_tournament_statuses",
         "schedule": crontab(minute="*"),  # Run every minute
     },
     "cleanup-unpaid-tournaments-registrations": {
-        "task": "tournaments.tasks.cleanup_unpaid_tournaments_and_registrations",
+        "task": "tournaments.tasks.tournament_tasks.cleanup_unpaid_tournaments_and_registrations",
         "schedule": crontab(minute=0),  # Run every hour at minute 0
     },
     "update-platform-statistics": {
-        "task": "tournaments.tasks.update_platform_statistics",
+        "task": "tournaments.tasks.tournament_tasks.update_platform_statistics",
         "schedule": crontab(minute=5),  # Run every hour at minute 5
     },
     "refresh-host-dashboards": {
-        "task": "tournaments.tasks.refresh_all_host_dashboards",
+        "task": "tournaments.tasks.tournament_tasks.refresh_all_host_dashboards",
         "schedule": crontab(minute="*/10"),  # Run every 10 minutes
     },
     "update-leaderboard": {
-        "task": "tournaments.tasks.update_leaderboard",
+        "task": "tournaments.tasks.score_tasks.update_leaderboard",
         "schedule": crontab(minute="*/30"),  # Run every 30 minutes
     },
     "send-tournament-reminders-24h": {
-        "task": "tournaments.tasks.send_tournament_reminders_24h",
+        "task": "tournaments.tasks.email_tasks.send_tournament_reminders_24h",
         "schedule": crontab(minute=0),  # Run every hour at minute 0
     },
     "send-tournament-reminders-1h": {
-        "task": "tournaments.tasks.send_tournament_reminders_1h",
+        "task": "tournaments.tasks.email_tasks.send_tournament_reminders_1h",
         "schedule": crontab(minute="*/5"),  # Run every 5 minutes
     },
     "notify-credential-release": {
-        "task": "tournaments.tasks.notify_credential_release",
+        "task": "tournaments.tasks.tournament_tasks.notify_credential_release",
         "schedule": crontab(minute="*"),  # Run every minute
     },
     "notify-match-credential-release": {
-        "task": "tournaments.tasks.notify_match_credential_release",
+        "task": "tournaments.tasks.tournament_tasks.notify_match_credential_release",
         "schedule": crontab(minute="*"),  # Run every minute
     },
     "notify-slot-list-release": {
-        "task": "tournaments.tasks.notify_slot_list_release",
+        "task": "tournaments.tasks.tournament_tasks.notify_slot_list_release",
         "schedule": crontab(minute="*"),  # Run every minute
     },
     "notify-match-start": {
-        "task": "tournaments.tasks.notify_match_start",
+        "task": "tournaments.tasks.tournament_tasks.notify_match_start",
         "schedule": crontab(minute="*"),  # Run every minute
     },
     "check-temp-team-conversions": {
