@@ -463,16 +463,16 @@ class RoundGroupsListView(generics.GenericAPIView):
                 player_profile = PlayerProfile.objects.get(user=request.user)
                 tournament = Tournament.objects.get(id=tournament_id)
 
-                # Check if player is registered as captain
+                # Check if player is registered as captain (confirmed only — skip cancelled/rejected)
                 player_registration = TournamentRegistration.objects.filter(
-                    tournament=tournament, player=player_profile
+                    tournament=tournament, player=player_profile, status="confirmed"
                 ).first()
 
                 if not player_registration:
                     # Check if player is a team member of any registered team
                     team_ids = TeamMember.objects.filter(user=request.user).values_list("team_id", flat=True)
                     player_registration = TournamentRegistration.objects.filter(
-                        tournament=tournament, team_id__in=team_ids
+                        tournament=tournament, team_id__in=team_ids, status="confirmed"
                     ).first()
 
                 if not player_registration:
@@ -632,14 +632,14 @@ class RoundSlotListExportView(generics.GenericAPIView):
                 player_profile = PlayerProfile.objects.get(user=request.user)
                 tournament = Tournament.objects.get(id=tournament_id)
                 player_registration = TournamentRegistration.objects.filter(
-                    tournament=tournament, player=player_profile
+                    tournament=tournament, player=player_profile, status="confirmed"
                 ).first()
                 if not player_registration:
                     team_ids = TeamMember.objects.filter(user=request.user).values_list(
                         "team_id", flat=True
                     )
                     player_registration = TournamentRegistration.objects.filter(
-                        tournament=tournament, team_id__in=team_ids
+                        tournament=tournament, team_id__in=team_ids, status="confirmed"
                     ).first()
                 if not player_registration:
                     return Response(

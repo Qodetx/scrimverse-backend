@@ -123,9 +123,10 @@ class TournamentDetailView(generics.RetrieveAPIView):
                 player_profile = PlayerProfile.objects.get(user=request.user)
                 tournament_id = kwargs.get("pk")
 
-                # Check if player has a direct registration (captain)
+                # Check if player has a confirmed direct registration (captain)
+                # Exclude cancelled/rejected so a stale cancelled reg doesn't shadow a confirmed team membership
                 registration = TournamentRegistration.objects.filter(
-                    tournament_id=tournament_id, player=player_profile
+                    tournament_id=tournament_id, player=player_profile, status="confirmed"
                 ).first()
 
                 if registration:

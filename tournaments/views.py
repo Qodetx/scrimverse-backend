@@ -156,15 +156,21 @@ class TournamentDetailView(generics.RetrieveAPIView):
                 player_profile = PlayerProfile.objects.get(user=request.user)
                 tournament_id = kwargs.get("pk")
 
-                # Check if player has a registration
+                # Check if player has a confirmed registration (captain)
                 registration = TournamentRegistration.objects.filter(
-                    tournament_id=tournament_id, player=player_profile
+                    tournament_id=tournament_id, player=player_profile, status="confirmed"
                 ).first()
 
                 if registration:
                     response.data["user_registration_status"] = registration.status
                 else:
-                    response.data["user_registration_status"] = None
+                    # Fall back to team membership for players who joined via another captain's reg
+                    team_reg = TournamentRegistration.objects.filter(
+                        tournament_id=tournament_id,
+                        team__members__user=request.user,
+                        status="confirmed"
+                    ).first()
+                    response.data["user_registration_status"] = team_reg.status if team_reg else None
             except PlayerProfile.DoesNotExist:
                 response.data["user_registration_status"] = None
         else:
