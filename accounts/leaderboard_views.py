@@ -56,7 +56,8 @@ class LeaderboardView(generics.GenericAPIView):
                 top_teams = (
                     TeamStatistics.objects.filter(game_name='ALL').select_related('team')
                     .filter(Q(scrim_position_points__gt=0) | Q(scrim_kill_points__gt=0) | Q(scrim_wins__gt=0))
-                    .order_by('-scrim_position_points', '-scrim_kill_points', '-scrim_wins')[:limit]
+                    .annotate(scrim_total=F('scrim_position_points') + F('scrim_kill_points'))
+                    .order_by('-scrim_total', '-scrim_wins', '-scrim_kill_points')[:limit]
                 )
                 leaderboard_data = []
                 for rank, stats in enumerate(top_teams, start=1):
@@ -105,7 +106,8 @@ class LeaderboardView(generics.GenericAPIView):
                 top_teams = (
                     TeamStatistics.objects.filter(game_name='ALL').select_related('team')
                     .filter(Q(tournament_position_points__gt=0) | Q(tournament_kill_points__gt=0) | Q(tournament_wins__gt=0))
-                    .order_by('-tournament_position_points', '-tournament_kill_points', '-tournament_wins')[:limit]
+                    .annotate(tournament_total=F('tournament_position_points') + F('tournament_kill_points'))
+                    .order_by('-tournament_total', '-tournament_wins', '-tournament_kill_points')[:limit]
                 )
                 leaderboard_data = []
                 for rank, stats in enumerate(top_teams, start=1):
