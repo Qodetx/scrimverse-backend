@@ -981,11 +981,12 @@ class SubmitIGNView(APIView):
         if registration.player.user != request.user:
             return Response({"error": "Only the team captain can submit IGNs."}, status=status.HTTP_403_FORBIDDEN)
 
-        # Fully locked registrations cannot be modified (all IGNs were submitted under old flow)
-        if registration.ign_locked:
-            return Response({"error": "IGNs are already locked for this registration."}, status=status.HTTP_403_FORBIDDEN)
-
         tournament = registration.tournament
+
+        # Locked registrations (old captain-fills-all flow) stay editable while the
+        # tournament is live — captains can re-submit/correct IGNs during ongoing rounds.
+        if registration.ign_locked and tournament.status != "ongoing":
+            return Response({"error": "IGNs are already locked for this registration."}, status=status.HTTP_403_FORBIDDEN)
 
         incoming = request.data.get("ign_submissions")
         if not isinstance(incoming, dict):
