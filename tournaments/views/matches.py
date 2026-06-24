@@ -79,7 +79,8 @@ class StartMatchView(generics.GenericAPIView):
                     )
 
         # Parse optional scheduled credential release time
-        credential_release_time = None
+        # Preserve existing release time if the host doesn't explicitly send a new one
+        credential_release_time = match.credential_release_time
         raw_release = request.data.get("credential_release_time")
         if raw_release:
             from django.utils.dateparse import parse_datetime
