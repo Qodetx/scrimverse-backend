@@ -421,3 +421,12 @@ AWS_SNS_REGION = config("AWS_SNS_REGION", default="ap-south-2")
 # MSG91 SMS (primary OTP provider)
 MSG91_AUTH_KEY = config("MSG91_AUTH_KEY", default="")
 MSG91_TEMPLATE_ID = config("MSG91_TEMPLATE_ID", default="")
+
+# MSG91 WhatsApp (team invites — replaces phone SMS)
+# PLACEHOLDER: get template name + from_number from client once they share MSG91 dashboard details
+MSG91_WHATSAPP_FROM_NUMBER = config("MSG91_WHATSAPP_FROM_NUMBER", default="")  # WABA number, no + prefix
+MSG91_WHATSAPP_TEMPLATE_NAME = config("MSG91_WHATSAPP_TEMPLATE_NAME", default="scrimverse_verification_alert")
+
+# AI Score Extraction (match result screenshots)
+GEMINI_API_KEY = config("GEMINI_API_KEY", default="")           # Primary: Google Gemini 1.5 Flash (free 1500 req/day)
+OCR_SPACE_API_KEY = config("OCR_SPACE_API_KEY", default="helloworld")  # Fallback: OCR.space (free 500 req/day)

@@ -119,7 +119,7 @@ class TournamentRegistrationInitiateView(APIView):
                 )
 
             # Build the initial invited_members_status dict using the mode-appropriate contact keys
-            if invite_mode == 'phone':
+            if invite_mode in ('phone', 'whatsapp'):
                 contact_list = original_phones
             elif invite_mode == 'username':
                 contact_list = [u.username for u in teammate_users]
@@ -194,8 +194,8 @@ class TournamentRegistrationInitiateView(APIView):
                             defaults={'is_temporary': False},
                         )
 
-                    if invite_mode == 'phone':
-                        # Phone mode: phones are already normalised (10-digit) by the serializer
+                    if invite_mode in ('phone', 'whatsapp'):
+                        # Phone/WhatsApp mode: phones are already normalised (10-digit) by the serializer
                         for phone in original_phones:
                             invite_token = str(uuid4())
                             invite_expires = timezone.now() + timezone.timedelta(days=7)
@@ -205,7 +205,7 @@ class TournamentRegistrationInitiateView(APIView):
                                 player=None,  # unknown until user accepts
                                 status='pending',
                                 request_type='invite',
-                                invite_type='phone',
+                                invite_type=invite_mode,
                                 phone_number=phone,
                                 invite_token=invite_token,
                                 invite_expires_at=invite_expires,
@@ -219,17 +219,26 @@ class TournamentRegistrationInitiateView(APIView):
                                 'is_registered': False,
                             })
 
-                            # Send SMS
-                            try:
-                                from scrimverse.sms_utils import send_team_invite_sms
-                                send_team_invite_sms(
-                                    phone_number=f'+91{phone}',
-                                    captain_name=request.user.username,
-                                    team_name=team.name,
-                                    invite_token=invite_token,
-                                )
-                            except Exception as e:
-                                logger.error(f'Failed to send SMS to {phone}: {e}')
+                            if invite_mode == 'whatsapp':
+                                try:
+                                    from scrimverse.sms_utils import send_team_invite_whatsapp
+                                    send_team_invite_whatsapp(
+                                        phone_number=f'+91{phone}',
+                                        invite_token=invite_token,
+                                    )
+                                except Exception as e:
+                                    logger.error(f'Failed to send WhatsApp invite to {phone}: {e}')
+                            else:
+                                try:
+                                    from scrimverse.sms_utils import send_team_invite_sms
+                                    send_team_invite_sms(
+                                        phone_number=f'+91{phone}',
+                                        captain_name=request.user.username,
+                                        team_name=team.name,
+                                        invite_token=invite_token,
+                                    )
+                                except Exception as e:
+                                    logger.error(f'Failed to send SMS to {phone}: {e}')
 
                     elif invite_mode == 'username':
                         # Username mode: teammate_users are resolved User objects from serializer

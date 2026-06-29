@@ -60,6 +60,7 @@ from tournaments.views.matches import (  # noqa: F401
     EndMatchView,
     UpdateMatchCredentialsView,
     SubmitMatchScoresView,
+    ExtractMatchScoresView,
     GetTeamPlayersView,
 )
 

@@ -2,8 +2,13 @@
 Match management views.
 Handles starting, ending, scoring matches, and fetching team players.
 """
+import json
 import logging
+import re
+from difflib import SequenceMatcher
 
+import requests as http_requests
+from django.conf import settings
 from django.utils import timezone
 
 from rest_framework import generics
@@ -404,6 +409,199 @@ class SubmitMatchScoresView(generics.GenericAPIView):
                 "group_completed": group.status == "completed",
             }
         )
+
+
+def _extract_via_gemini(image_bytes, mime_type):
+    """Send screenshot to Gemini 1.5 Flash and return structured rows."""
+    import google.generativeai as genai
+    import PIL.Image
+    import io
+
+    api_key = getattr(settings, 'GEMINI_API_KEY', '')
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY not configured")
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    image = PIL.Image.open(io.BytesIO(image_bytes))
+
+    prompt = (
+        "You are reading a mobile battle royale game match result screen. "
+        "Extract the results table. Return ONLY a valid JSON array, no markdown, no explanation:\n"
+        '[{"rank": <integer placement rank 1-25>, '
+        '"slot": <integer slot number if visible or null>, '
+        '"team_name": "<exact team name or IGN shown>", '
+        '"kills": <integer kill count>}]\n'
+        "If slot numbers are shown in the screen, include them. If not visible, set slot to null.\n"
+        "If multiple players belong to the same team shown as separate rows, sum their kills.\n"
+        "Only include rows where you can clearly read the rank/placement and kills."
+    )
+
+    response = model.generate_content([prompt, image])
+    text = response.text.strip()
+    text = re.sub(r'^```(?:json)?\s*', '', text)
+    text = re.sub(r'\s*```$', '', text)
+    return json.loads(text)
+
+
+def _extract_via_ocr_space(image_bytes, mime_type='image/png'):
+    """Send screenshot to OCR.space and parse raw text into structured rows."""
+    api_key = getattr(settings, 'OCR_SPACE_API_KEY', 'helloworld')
+    resp = http_requests.post(
+        'https://api.ocr.space/parse/image',
+        files={'filename': ('screenshot.png', image_bytes, mime_type)},
+        data={'apikey': api_key, 'language': 'eng', 'isTable': True, 'OCREngine': 2},
+        timeout=30,
+    )
+    data = resp.json()
+    if data.get('IsErroredOnProcessing'):
+        raise ValueError(f"OCR.space: {data.get('ErrorMessage')}")
+
+    raw_text = ''.join(r.get('ParsedText', '') for r in data.get('ParsedResults', []))
+    rows = []
+    for line in raw_text.split('\n'):
+        line = line.strip()
+        m = re.match(r'^(\d{1,2})\s+(.+?)\s+(\d+)\s*$', line)
+        if m:
+            rows.append({
+                'rank': int(m.group(1)),
+                'slot': None,
+                'team_name': m.group(2).strip(),
+                'kills': int(m.group(3)),
+            })
+    return rows
+
+
+def _fuzzy_match_team(name, candidates):
+    """Return (registration, ratio) for the closest name match from candidates."""
+    best, best_ratio = None, 0.0
+    name_lower = name.lower()
+    for reg in candidates:
+        for candidate_name in [reg.team_name or ''] + list((reg.ign_submissions or {}).values()):
+            ratio = SequenceMatcher(None, name_lower, candidate_name.lower()).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best = reg
+    return best, best_ratio
+
+
+class ExtractMatchScoresView(generics.GenericAPIView):
+    """
+    Extract match scores from uploaded screenshots using AI (Gemini primary, OCR.space fallback).
+    POST /api/tournaments/<tournament_id>/matches/<match_id>/extract-scores/
+    Body: multipart/form-data, field "screenshots" (1–5 image files)
+    Returns a preview array for the host to review — does NOT save scores.
+    """
+
+    permission_classes = [IsHostUser]
+
+    def post(self, request, tournament_id, match_id):
+        try:
+            host_profile = HostProfile.objects.get(user=request.user)
+            tournament = Tournament.objects.get(id=tournament_id, host=host_profile)
+        except (HostProfile.DoesNotExist, Tournament.DoesNotExist):
+            return Response({"error": "Tournament not found"}, status=404)
+
+        try:
+            match = Match.objects.get(id=match_id, group__tournament=tournament)
+        except Match.DoesNotExist:
+            return Response({"error": "Match not found"}, status=404)
+
+        screenshots = request.FILES.getlist('screenshots')
+        if not screenshots:
+            return Response({"error": "No screenshots provided"}, status=400)
+        if len(screenshots) > 5:
+            return Response({"error": "Maximum 5 screenshots allowed"}, status=400)
+
+        group_registrations = list(
+            TournamentRegistration.objects.filter(
+                tournament_groups=match.group
+            ).select_related('team').order_by('id')
+        )
+        placement_points = tournament.placement_points or {}
+
+        # Extract from each screenshot; merge by rank (first screenshot wins for ties)
+        all_rows = {}
+        extraction_method = 'gemini'
+
+        for screenshot in screenshots:
+            image_bytes = screenshot.read()
+            mime = screenshot.content_type or 'image/png'
+            try:
+                rows = _extract_via_gemini(image_bytes, mime)
+                logger.info(f"Gemini extracted {len(rows)} rows from {screenshot.name}")
+            except Exception as exc:
+                logger.warning(f"Gemini failed ({exc}), falling back to OCR.space")
+                extraction_method = 'ocr_space'
+                try:
+                    rows = _extract_via_ocr_space(image_bytes, mime)
+                    logger.info(f"OCR.space extracted {len(rows)} rows from {screenshot.name}")
+                except Exception as exc2:
+                    logger.error(f"OCR.space also failed: {exc2}")
+                    rows = []
+
+            for row in rows:
+                rank = row.get('rank')
+                if rank and rank not in all_rows:
+                    all_rows[rank] = row
+
+        if not all_rows:
+            msg = ("Both Gemini and OCR.space failed to extract data from the screenshots"
+                   if extraction_method == 'ocr_space'
+                   else "No data could be extracted from the screenshots")
+            return Response({"error": msg}, status=422)
+
+        # Map each extracted row to a registered team
+        result = []
+        used_reg_ids = set()
+
+        for rank in sorted(all_rows.keys()):
+            row = all_rows[rank]
+            slot = row.get('slot')
+            team_name_raw = row.get('team_name', '')
+            kills = int(row.get('kills', 0))
+            pos_pts = int(placement_points.get(str(rank), 0))
+
+            matched_reg = None
+            confidence = 'low'
+
+            # Primary: slot-number matching
+            if slot and 1 <= int(slot) <= len(group_registrations):
+                matched_reg = group_registrations[int(slot) - 1]
+                if matched_reg.id not in used_reg_ids:
+                    confidence = 'high'
+                else:
+                    matched_reg = None
+
+            # Fallback: fuzzy name/IGN match
+            if not matched_reg:
+                available = [r for r in group_registrations if r.id not in used_reg_ids]
+                fuzzy_reg, ratio = _fuzzy_match_team(team_name_raw, available)
+                if ratio >= 0.65:
+                    matched_reg = fuzzy_reg
+                    confidence = 'high' if ratio >= 0.85 else 'medium'
+
+            if matched_reg:
+                used_reg_ids.add(matched_reg.id)
+
+            result.append({
+                'team_id': matched_reg.id if matched_reg else None,
+                'team_name': matched_reg.team_name if matched_reg else team_name_raw,
+                'extracted_name': team_name_raw,
+                'placement': rank,
+                'kills': kills,
+                'position_points': pos_pts,
+                'kill_points': kills,
+                'total_points': pos_pts + kills,
+                'confidence': confidence,
+            })
+
+        return Response({
+            'rows': result,
+            'extraction_method': extraction_method,
+            'extracted_count': len(result),
+            'total_teams': len(group_registrations),
+        })
 
 
 class GetTeamPlayersView(generics.GenericAPIView):

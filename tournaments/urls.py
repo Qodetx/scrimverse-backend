@@ -42,6 +42,7 @@ from tournaments.views import (  # Tournament URLs; Registration URLs; Rating UR
     EndMatchView,
     UpdateMatchCredentialsView,
     SubmitMatchScoresView,
+    ExtractMatchScoresView,
     GetTeamPlayersView,
     SubmitIGNView,
 )
@@ -114,6 +115,11 @@ urlpatterns = [
         "<int:tournament_id>/matches/<int:match_id>/scores/",
         SubmitMatchScoresView.as_view(),
         name="submit-match-scores",
+    ),
+    path(
+        "<int:tournament_id>/matches/<int:match_id>/extract-scores/",
+        ExtractMatchScoresView.as_view(),
+        name="extract-match-scores",
     ),
     # Team Players
     path(
