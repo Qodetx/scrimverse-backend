@@ -156,3 +156,74 @@ def send_team_invite_sms(phone_number, captain_name, team_name, invite_token):
 
     logger.warning(f"MSG91 failed, falling back to SNS for {phone_number}")
     return _send_via_sns(phone_number, message)
+
+
+# ── MSG91 WhatsApp ─────────────────────────────────────────────────────────
+
+def send_team_invite_whatsapp(phone_number, invite_token):
+    """
+    Send team invite via WhatsApp using approved Meta template.
+    Template: "scrimverse_verification_alert"
+    Body is static. "Join Team" CTA button URL = base_url + invite_token (dynamic suffix).
+    phone_number: full number with country code e.g. +919876543210
+    Returns True on success, False otherwise.
+
+    BEFORE GOING LIVE: confirm with client:
+      1. MSG91_WHATSAPP_FROM_NUMBER (WABA number in their MSG91 dashboard)
+      2. MSG91_WHATSAPP_TEMPLATE_NAME (exact name as registered with Meta)
+      3. Whether the CTA button URL suffix is the token only or the full URL
+    """
+    auth_key = getattr(settings, 'MSG91_AUTH_KEY', '')
+    from_number = getattr(settings, 'MSG91_WHATSAPP_FROM_NUMBER', '')
+    template_name = getattr(settings, 'MSG91_WHATSAPP_TEMPLATE_NAME', 'scrimverse_verification_alert')
+
+    if not auth_key or not from_number:
+        logger.warning("MSG91 WhatsApp not configured (missing MSG91_WHATSAPP_FROM_NUMBER or MSG91_AUTH_KEY)")
+        return False
+
+    # Strip leading + for MSG91
+    mobile = phone_number.lstrip('+')
+
+    try:
+        response = req.post(
+            'https://api.msg91.com/api/v5.2/whatsapp/whatsapp-outbound-message/bulk/',
+            headers={
+                'Authkey': auth_key,
+                'Content-Type': 'application/json',
+            },
+            json={
+                "integrated_number": from_number,
+                "content_type": "template",
+                "payload": {
+                    "messaging_product": "whatsapp",
+                    "to": mobile,
+                    "type": "template",
+                    "template": {
+                        "name": template_name,
+                        "language": {"code": "en"},
+                        "components": [
+                            {
+                                # CTA button: "Join Team" — URL suffix is the invite_token
+                                # Template URL in Meta: https://scrimverse.com/join-team/{{1}}
+                                "type": "button",
+                                "sub_type": "url",
+                                "index": 0,
+                                "parameters": [
+                                    {"type": "text", "text": invite_token}
+                                ],
+                            }
+                        ],
+                    },
+                },
+            },
+            timeout=10,
+        )
+        data = response.json()
+        if data.get('type') == 'success' or response.status_code == 200:
+            logger.info(f"WhatsApp invite sent via MSG91 to {phone_number}")
+            return True
+        logger.warning(f"MSG91 WhatsApp failed for {phone_number}: {data}")
+        return False
+    except Exception as e:
+        logger.error(f"MSG91 WhatsApp error for {phone_number}: {e}")
+        return False

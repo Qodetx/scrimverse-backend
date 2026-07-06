@@ -412,18 +412,16 @@ class SubmitMatchScoresView(generics.GenericAPIView):
 
 
 def _extract_via_gemini(image_bytes, mime_type):
-    """Send screenshot to Gemini 1.5 Flash and return structured rows."""
-    import google.generativeai as genai
-    import PIL.Image
+    """Send screenshot to Gemini 2.0 Flash and return structured rows."""
     import io
+    from google import genai
+    from google.genai import types
 
     api_key = getattr(settings, 'GEMINI_API_KEY', '')
     if not api_key:
         raise ValueError("GEMINI_API_KEY not configured")
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    image = PIL.Image.open(io.BytesIO(image_bytes))
+    client = genai.Client(api_key=api_key)
 
     prompt = (
         "You are reading a mobile battle royale game match result screen. "
@@ -437,7 +435,13 @@ def _extract_via_gemini(image_bytes, mime_type):
         "Only include rows where you can clearly read the rank/placement and kills."
     )
 
-    response = model.generate_content([prompt, image])
+    response = client.models.generate_content(
+        model='gemini-2.5-flash',
+        contents=[
+            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+            prompt,
+        ],
+    )
     text = response.text.strip()
     text = re.sub(r'^```(?:json)?\s*', '', text)
     text = re.sub(r'\s*```$', '', text)

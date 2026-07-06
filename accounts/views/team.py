@@ -1467,32 +1467,29 @@ class TeamViewSet(viewsets.ModelViewSet):
 
                     results.append({"value": value, "status": "success", "message": f"Email invite sent to {value}"})
 
-                elif invite_type == "phone":
-                    # Create invite with phone number
+                elif invite_type == "whatsapp":
+                    # Create invite with phone number, deliver via WhatsApp
                     invite_token = str(uuid.uuid4())
                     TeamJoinRequest.objects.create(
                         team=team,
                         status="pending",
                         request_type="invite",
-                        invite_type="phone",
+                        invite_type="whatsapp",
                         phone_number=value,
                         invite_token=invite_token,
                         invite_expires_at=timezone.now() + timezone.timedelta(days=7),
                     )
 
-                    # Send SMS via AWS SNS
                     try:
-                        from scrimverse.sms_utils import send_team_invite_sms
-                        send_team_invite_sms(
+                        from scrimverse.sms_utils import send_team_invite_whatsapp
+                        send_team_invite_whatsapp(
                             phone_number=value,
-                            captain_name=request.user.username,
-                            team_name=team.name,
                             invite_token=invite_token,
                         )
                     except Exception as e:
-                        logger.error(f"Failed to send SMS to {value}: {e}")
+                        logger.error(f"Failed to send WhatsApp invite to {value}: {e}")
 
-                    results.append({"value": value, "status": "success", "message": f"SMS invite sent to {value}"})
+                    results.append({"value": value, "status": "success", "message": f"WhatsApp invite sent to {value}"})
 
                 else:
                     results.append({"value": value, "status": "error", "message": f"Invalid invite type: {invite_type}"})
@@ -1599,6 +1596,14 @@ class TeamViewSet(viewsets.ModelViewSet):
                     expires_at=new_expiry.strftime("%B %d, %Y"),
                 )
                 send_label = f"Email re-sent to {invite.invited_email}"
+
+            elif invite.invite_type == "whatsapp" and invite.phone_number:
+                from scrimverse.sms_utils import send_team_invite_whatsapp
+                send_team_invite_whatsapp(
+                    phone_number=invite.phone_number,
+                    invite_token=invite.invite_token,
+                )
+                send_label = f"WhatsApp invite re-sent to {invite.phone_number}"
 
             elif invite.invite_type == "phone" and invite.phone_number:
                 from scrimverse.sms_utils import send_team_invite_sms
@@ -1875,8 +1880,8 @@ class AcceptInviteView(APIView):
             )
 
         # Validate identity matches based on invite type — each mode is independent
-        if invite.invite_type == 'phone':
-            # Phone invite: verify the logged-in user's phone matches the invited phone
+        if invite.invite_type in ('phone', 'whatsapp'):
+            # Phone/WhatsApp invite: verify the logged-in user's phone matches the invited phone
             user_phone_raw = getattr(user, 'phone_number', '') or ''
             clean_user_phone = user_phone_raw.strip().lstrip('+')
             if clean_user_phone.startswith('91') and len(clean_user_phone) > 10:
@@ -2041,7 +2046,7 @@ class AcceptInviteView(APIView):
                     registration.invited_members_status = {}
 
                 # Determine the contact key based on invite type — each mode is independent
-                if invite.invite_type == 'phone':
+                if invite.invite_type in ('phone', 'whatsapp'):
                     match_key = invite.phone_number or ''
                 elif invite.invite_type == 'username':
                     match_key = user.username
@@ -2065,7 +2070,7 @@ class AcceptInviteView(APIView):
                 updated_members = []
                 for member in registration.team_members:
                     member_matched = False
-                    if invite.invite_type == 'phone' and member.get('phone') == invite.phone_number:
+                    if invite.invite_type in ('phone', 'whatsapp') and member.get('phone') == invite.phone_number:
                         member_matched = True
                     elif invite.invite_type == 'username' and (member.get('username') or '').lower() == user.username.lower():
                         member_matched = True
