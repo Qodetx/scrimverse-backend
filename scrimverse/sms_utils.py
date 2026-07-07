@@ -199,7 +199,7 @@ def send_team_invite_whatsapp(phone_number, invite_token):
                             "sub_type": "url",
                             "index": "0",
                             "parameters": [
-                                {"type": "text", "text": invite_token}
+                                {"type": "text", "text": f"join-team/{invite_token}"}
                             ],
                         }
                     ],
